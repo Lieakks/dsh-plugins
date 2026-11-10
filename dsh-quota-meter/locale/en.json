@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Quota Meter",
+    "description": "Shows how much credit the current session has used since its first message, refreshing while a task runs."
+  }
+}
