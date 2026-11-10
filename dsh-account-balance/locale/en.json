@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Account balance",
+    "description": "Shows the signed-in DeepSeek account balance at the sidebar foot, with or without an open conversation, and refreshes it while the page is visible."
+  }
+}

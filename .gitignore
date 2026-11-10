@@ -1,0 +1,13 @@
+# 依赖与构建产物（这些包本身不装依赖，保留以防后续加构建步骤）
+node_modules/
+dist/
+lib/
+
+# 日志与临时文件
+*.log
+*.tmp
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini

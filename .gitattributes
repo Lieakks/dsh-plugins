@@ -1,0 +1,2 @@
+# 统一用 LF，避免 Windows 检出时行尾混用
+* text=auto eol=lf
