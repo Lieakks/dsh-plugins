@@ -26,10 +26,16 @@ window.__ModuleLoader__.load({
         remove: 'Remove',
         dim: 'Dim',
         panel: 'Panel transparency',
-        textMode: 'Text contrast',
+        panelShade: 'Panel shade',
         auto: 'Auto',
-        lightText: 'Light text',
-        darkText: 'Dark text',
+        darkGlass: 'Dark',
+        lightGlass: 'Light',
+        textTheme: 'Text colors',
+        contrast: 'High contrast',
+        soft: 'Soft',
+        custom: 'Custom',
+        primaryText: 'Body text',
+        mutedText: 'Muted text',
         preview: 'Preview',
         note: 'Settings are stored in this browser only; images are downscaled before they are saved.',
         storageFull: 'That image is too large to store locally. Downscale it or paste a URL instead.',
@@ -53,10 +59,16 @@ window.__ModuleLoader__.load({
         remove: '移除',
         dim: '暗化',
         panel: '面板通透度',
-        textMode: '文字对比度',
+        panelShade: '面板明暗',
         auto: '自动',
-        lightText: '浅字',
-        darkText: '深字',
+        darkGlass: '深色',
+        lightGlass: '浅色',
+        textTheme: '文字配色',
+        contrast: '高对比',
+        soft: '柔和',
+        custom: '自定义',
+        primaryText: '正文',
+        mutedText: '次级文字',
         preview: '预览',
         note: '设置仅保存在本机浏览器；图片保存前会自动压缩。',
         storageFull: '图片太大，无法保存在本地。请先压缩，或改用图片链接。',
@@ -119,6 +131,42 @@ window.__ModuleLoader__.load({
     const SURFACE_FACTORS = { layer1: 0.9, layer2: 0.8, overlay: 0.5, sidebar: 1 };
     /** Floors keep dense text areas readable even at maximum transparency. */
     const SURFACE_FLOORS = { layer1: 0.36, layer2: 0.42, overlay: 0.65, sidebar: 0.36 };
+
+    /**
+     * Text palettes layered on the glass. `contrast` pushes muted copy close to the
+     * body colour, because secondary labels are the first thing a photo swallows.
+     */
+    const TEXT_PRESETS = {
+      contrast: {
+        lightText: { primary: '#ffffff', muted: '#e3eaed' },
+        darkText: { primary: '#000000', muted: '#2a3238' },
+      },
+      soft: {
+        lightText: { primary: '#e6edef', muted: '#a7b4ba' },
+        darkText: { primary: '#26303a', muted: '#5f6a70' },
+      },
+    };
+
+    /** Text colours for one state: the preset, or the two colours the user picked. */
+    function resolveTextColors(state, direction) {
+      const glass = GLASS[direction] ?? GLASS.darkText;
+      const preset = state.textTheme === 'contrast' || state.textTheme === 'soft' ? TEXT_PRESETS[state.textTheme] : null;
+      const base = preset === null ? { primary: glass.text, muted: glass.muted } : preset[direction] ?? preset.darkText;
+      if (state.textTheme !== 'custom') return base;
+      const primary = typeof state.textPrimary === 'string' && /^#[0-9a-f]{6}$/i.test(state.textPrimary) ? state.textPrimary : base.primary;
+      const muted = typeof state.textMuted === 'string' && /^#[0-9a-f]{6}$/i.test(state.textMuted) ? state.textMuted : base.muted;
+      return { primary, muted };
+    }
+
+    /** Relative brightness of a `#rrggbb` colour, or `null` when the value is unusable. */
+    function hexLuminance(color) {
+      const value = String(color).trim().replace('#', '');
+      if (!/^[0-9a-fA-F]{6}$/.test(value)) return null;
+      const red = parseInt(value.slice(0, 2), 16) / 255;
+      const green = parseInt(value.slice(2, 4), 16) / 255;
+      const blue = parseInt(value.slice(4, 6), 16) / 255;
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    }
 
     /** A `null` palette leaves the built-in appearance untouched. */
     const SKINS = [
@@ -293,10 +341,11 @@ window.__ModuleLoader__.load({
      * Build the token override layer.
      *
      * Without a wallpaper a skin replaces the palette outright. With one, the canvas
-     * becomes transparent, surfaces become glass, and labels follow `direction`, so a
-     * dark wall gets light text (and dark glass) whatever the light/dark appearance is.
+     * becomes transparent, surfaces become glass, and labels come from `textColors`,
+     * so a dark wall gets light text (and dark glass) whatever the light/dark
+     * appearance is, while the text palette stays independently selectable.
      */
-    function buildTokens(skin, wallpaper, panel, direction) {
+    function buildTokens(skin, wallpaper, panel, direction, textColors) {
       const isDefault = skin.light === null || skin.dark === null;
       if (!wallpaper) {
         if (isDefault) return null;
@@ -311,12 +360,13 @@ window.__ModuleLoader__.load({
       }
 
       const glass = GLASS[direction] ?? GLASS.darkText;
+      const text = textColors === undefined || textColors === null ? { primary: glass.text, muted: glass.muted } : textColors;
       const transparency = clamp(panel, 0, 0.85);
       const tokens = {
         [TOKEN.base]: { light: 'transparent', dark: 'transparent' },
         // Both scheme slots carry the same value: the text answers to the wallpaper.
-        [TOKEN.text]: { light: glass.text, dark: glass.text },
-        [TOKEN.muted]: { light: glass.muted, dark: glass.muted },
+        [TOKEN.text]: { light: text.primary, dark: text.primary },
+        [TOKEN.muted]: { light: text.muted, dark: text.muted },
         [TOKEN.border1]: { light: glass.border1, dark: glass.border1 },
         [TOKEN.border2]: { light: glass.border2, dark: glass.border2 },
       };
@@ -380,12 +430,12 @@ window.__ModuleLoader__.load({
 
     /**
      * Which way the glass reads: `lightText` on a dark wall, `darkText` on a bright
-     * one. An explicit choice wins; otherwise the measured brightness decides, and
-     * an unmeasurable image falls back to the appearance scheme.
+     * one. `shade` is the explicit panel choice; otherwise the measured brightness
+     * decides, and an unmeasurable image falls back to the appearance scheme.
      */
-    function resolveDirection(text, luminance, scheme) {
-      if (text === 'light') return 'lightText';
-      if (text === 'dark') return 'darkText';
+    function resolveDirection(shade, luminance, scheme) {
+      if (shade === 'dark') return 'lightText';
+      if (shade === 'light') return 'darkText';
       if (typeof luminance === 'number' && Number.isFinite(luminance)) {
         return luminance < 0.5 ? 'lightText' : 'darkText';
       }
@@ -425,7 +475,18 @@ window.__ModuleLoader__.load({
     }
 
     function defaultState() {
-      return { skin: 'default', wallpaper: null, dim: 0.18, panel: 0.35, text: 'auto', luminance: null, message: null };
+      return {
+        skin: 'default',
+        wallpaper: null,
+        dim: 0.18,
+        panel: 0.35,
+        shade: 'auto',
+        textTheme: 'auto',
+        textPrimary: null,
+        textMuted: null,
+        luminance: null,
+        message: null,
+      };
     }
 
     function loadState() {
@@ -447,7 +508,14 @@ window.__ModuleLoader__.load({
             : null;
         const legacy = parsed.panel === undefined;
         const storedDim = parsed.dim === undefined ? 0.18 : clamp(parsed.dim, 0, 0.85);
-        const text = parsed.text === 'light' || parsed.text === 'dark' ? parsed.text : 'auto';
+        // The old `text` field chose a text colour; its glass shade is the opposite one.
+        const migratedShade = parsed.text === 'light' ? 'dark' : parsed.text === 'dark' ? 'light' : 'auto';
+        const shade = parsed.shade === 'dark' || parsed.shade === 'light' ? parsed.shade : migratedShade;
+        const textTheme =
+          parsed.textTheme === 'contrast' || parsed.textTheme === 'soft' || parsed.textTheme === 'custom'
+            ? parsed.textTheme
+            : 'auto';
+        const color = (value) => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : null);
         const luminance =
           typeof parsed.luminance === 'number' && Number.isFinite(parsed.luminance)
             ? Math.min(1, Math.max(0, parsed.luminance))
@@ -459,7 +527,10 @@ window.__ModuleLoader__.load({
           // defaults; start it lighter so the image reads, and let the slider raise it.
           dim: legacy ? Math.min(storedDim, 0.18) : storedDim,
           panel: legacy ? 0.35 : clamp(parsed.panel, 0, 0.85),
-          text,
+          shade,
+          textTheme,
+          textPrimary: color(parsed.textPrimary),
+          textMuted: color(parsed.textMuted),
           luminance,
           message: null,
         };
@@ -477,7 +548,10 @@ window.__ModuleLoader__.load({
             wallpaper: state.wallpaper,
             dim: state.dim,
             panel: state.panel,
-            text: state.text,
+            shade: state.shade,
+            textTheme: state.textTheme,
+            textPrimary: state.textPrimary,
+            textMuted: state.textMuted,
             luminance: state.luminance,
           }),
         );
@@ -578,6 +652,14 @@ window.__ModuleLoader__.load({
         font-weight: 500;
       }
       .dsh-skins__seg-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
+      .dsh-skins__color {
+        width: 44px; height: 26px; padding: 0;
+        border: 1px solid var(--dsw-alias-border-l2);
+        border-radius: 8px; background: var(--dsw-alias-bg-layer-2); cursor: pointer;
+      }
+      .dsh-skins__color::-webkit-color-swatch-wrapper { padding: 2px; }
+      .dsh-skins__color::-webkit-color-swatch { border: 0; border-radius: 6px; }
+      .dsh-skins__color:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
       .dsh-skins__value { font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
       .dsh-skins__stack { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
       .dsh-skins__sliders { display: flex; flex-direction: column; gap: 8px; flex: 1 1 240px; min-width: 0; }
@@ -612,7 +694,7 @@ window.__ModuleLoader__.load({
       };
 
       /** Which way the glass reads for this state: light labels on dark glass, or the reverse. */
-      const directionOf = (state) => resolveDirection(state.text, state.luminance, scheme());
+      const directionOf = (state) => resolveDirection(state.shade, state.luminance, scheme());
 
       /** Modals, dialogs and other large overlays get a substrate; see scanOverlays below. */
       const SUBSTRATE_ATTR = 'data-dsh-skins-surface';
@@ -702,13 +784,18 @@ window.__ModuleLoader__.load({
           stripOverlays();
           return;
         }
-        const lightText = directionOf(state) === 'lightText';
+        const direction = directionOf(state);
+        const text = resolveTextColors(state, direction);
+        const primaryLuminance = hexLuminance(text.primary);
+        // The scrim and halo answer to the text colour, the panel substrate to the glass.
+        const lightText = primaryLuminance === null ? direction === 'lightText' : primaryLuminance > 0.55;
+        const glassDark = direction === 'lightText';
         const dim = clamp(state.dim, 0, 0.85);
         const tint = lightText ? '0, 0, 0' : '255, 255, 255';
         const halo = lightText
           ? '0 1px 2px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 0, 0, 0.22)'
           : '0 1px 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 255, 255, 0.3)';
-        const substrate = lightText ? 'rgba(10, 13, 16, 0.92)' : 'rgba(255, 255, 255, 0.94)';
+        const substrate = glassDark ? 'rgba(10, 13, 16, 0.92)' : 'rgba(255, 255, 255, 0.94)';
         styleElement.textContent = `
           html, body {
             background-image: linear-gradient(rgba(${tint}, ${dim}), rgba(${tint}, ${dim})), url("${cssUrl(wallpaper.value)}") !important;
@@ -733,11 +820,13 @@ window.__ModuleLoader__.load({
           layerOff();
           layerOff = null;
         }
+        const direction = directionOf(state);
         const tokens = buildTokens(
           findSkin(state.skin),
           state.wallpaper !== null,
           state.panel,
-          directionOf(state),
+          direction,
+          resolveTextColors(state, direction),
         );
         if (tokens === null) return;
         layerOff = ctx.theme.overrideTokens('dsh-skins', tokens);
@@ -1137,15 +1226,15 @@ window.__ModuleLoader__.load({
                       ),
                       h(
                         'div',
-                        { key: 'text', className: 'dsh-skins__slider-row' },
-                        h('span', { className: 'dsh-skins__label' }, t('textMode')),
+                        { key: 'shade', className: 'dsh-skins__slider-row' },
+                        h('span', { className: 'dsh-skins__label' }, t('panelShade')),
                         h(
                           'div',
-                          { className: 'dsh-skins__seg', role: 'group', 'aria-label': t('textMode') },
+                          { className: 'dsh-skins__seg', role: 'group', 'aria-label': t('panelShade') },
                           [
                             ['auto', 'auto'],
-                            ['light', 'lightText'],
-                            ['dark', 'darkText'],
+                            ['dark', 'darkGlass'],
+                            ['light', 'lightGlass'],
                           ].map(([value, label]) =>
                             h(
                               'button',
@@ -1153,14 +1242,71 @@ window.__ModuleLoader__.load({
                                 key: value,
                                 type: 'button',
                                 className: 'dsh-skins__seg-btn',
-                                'aria-pressed': state.text === value,
-                                onClick: () => commit({ text: value }),
+                                'aria-pressed': state.shade === value,
+                                onClick: () => commit({ shade: value }),
                               },
                               t(label),
                             ),
                           ),
                         ),
                       ),
+                      h(
+                        'div',
+                        { key: 'textTheme', className: 'dsh-skins__slider-row' },
+                        h('span', { className: 'dsh-skins__label' }, t('textTheme')),
+                        h(
+                          'div',
+                          { className: 'dsh-skins__seg', role: 'group', 'aria-label': t('textTheme') },
+                          [
+                            ['auto', 'auto'],
+                            ['contrast', 'contrast'],
+                            ['soft', 'soft'],
+                            ['custom', 'custom'],
+                          ].map(([value, label]) =>
+                            h(
+                              'button',
+                              {
+                                key: value,
+                                type: 'button',
+                                className: 'dsh-skins__seg-btn',
+                                'aria-pressed': state.textTheme === value,
+                                onClick: () => commit({ textTheme: value }),
+                              },
+                              t(label),
+                            ),
+                          ),
+                        ),
+                      ),
+                      state.textTheme === 'custom'
+                        ? h(
+                            'div',
+                            { key: 'custom-colors', className: 'dsh-skins__slider-row' },
+                            h('span', { className: 'dsh-skins__label' }, t('primaryText')),
+                            h('input', {
+                              type: 'color',
+                              className: 'dsh-skins__color',
+                              'aria-label': t('primaryText'),
+                              value: resolveTextColors(state, directionOf(state)).primary,
+                              onChange: (event) =>
+                                commit(
+                                  { textPrimary: event.target.value },
+                                  { deferPersist: true, layer: false, rebuildLayer: true },
+                                ),
+                            }),
+                            h('span', { className: 'dsh-skins__label' }, t('mutedText')),
+                            h('input', {
+                              type: 'color',
+                              className: 'dsh-skins__color',
+                              'aria-label': t('mutedText'),
+                              value: resolveTextColors(state, directionOf(state)).muted,
+                              onChange: (event) =>
+                                commit(
+                                  { textMuted: event.target.value },
+                                  { deferPersist: true, layer: false, rebuildLayer: true },
+                                ),
+                            }),
+                          )
+                        : null,
                     ),
                   )
                 : null,
