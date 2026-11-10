@@ -26,6 +26,10 @@ window.__ModuleLoader__.load({
         remove: 'Remove',
         dim: 'Dim',
         panel: 'Panel transparency',
+        textMode: 'Text contrast',
+        auto: 'Auto',
+        lightText: 'Light text',
+        darkText: 'Dark text',
         preview: 'Preview',
         note: 'Settings are stored in this browser only; images are downscaled before they are saved.',
         storageFull: 'That image is too large to store locally. Downscale it or paste a URL instead.',
@@ -49,6 +53,10 @@ window.__ModuleLoader__.load({
         remove: '移除',
         dim: '暗化',
         panel: '面板通透度',
+        textMode: '文字对比度',
+        auto: '自动',
+        lightText: '浅字',
+        darkText: '深字',
         preview: '预览',
         note: '设置仅保存在本机浏览器；图片保存前会自动压缩。',
         storageFull: '图片太大，无法保存在本地。请先压缩，或改用图片链接。',
@@ -78,32 +86,39 @@ window.__ModuleLoader__.load({
       sidebar: '--dsw-specific-sidebar-fill',
     };
 
-    /** Surface alpha factors used while a wallpaper is set; the panel slider scales them. */
-    const SURFACE_FACTORS = { layer1: 0.95, layer2: 0.85, overlay: 0.55, sidebar: 1.05 };
-
     /**
-     * Neutral glass colors for the built-in appearance. Its palette lives in the
-     * base stylesheets rather than in a theme definition, so a wallpaper over the
-     * default skin borrows these instead of leaving every panel opaque.
+     * Glass surfaces used while a wallpaper is set. Surfaces and labels switch
+     * together with the wallpaper's brightness rather than with light/dark, because
+     * the text sits on the image: a dark wall takes light labels on dark glass, a
+     * bright wall the opposite. The skin then contributes only its accents.
      */
-    const NEUTRAL = {
-      light: {
+    const GLASS = {
+      lightText: {
+        layer1: '#0f1316',
+        layer2: '#0a0d0f',
+        overlay: '#121619',
+        sidebar: '#0c0f12',
+        border1: 'rgba(255, 255, 255, 0.16)',
+        border2: 'rgba(255, 255, 255, 0.28)',
+        text: '#f5f8f9',
+        muted: '#c6cfd4',
+      },
+      darkText: {
         layer1: '#ffffff',
-        layer2: '#f4f5f6',
+        layer2: '#f3f5f6',
         overlay: '#ffffff',
         sidebar: '#f7f8f9',
-        border1: 'rgba(0, 0, 0, 0.1)',
-        border2: 'rgba(0, 0, 0, 0.18)',
-      },
-      dark: {
-        layer1: '#1e2126',
-        layer2: '#171a1e',
-        overlay: '#1c1f24',
-        sidebar: '#14161a',
-        border1: 'rgba(255, 255, 255, 0.12)',
-        border2: 'rgba(255, 255, 255, 0.2)',
+        border1: 'rgba(0, 0, 0, 0.12)',
+        border2: 'rgba(0, 0, 0, 0.22)',
+        text: '#11161a',
+        muted: '#4b555b',
       },
     };
+
+    /** Surface alpha factors used while a wallpaper is set; the panel slider scales them. */
+    const SURFACE_FACTORS = { layer1: 0.9, layer2: 0.8, overlay: 0.5, sidebar: 1 };
+    /** Floors keep dense text areas readable even at maximum transparency. */
+    const SURFACE_FLOORS = { layer1: 0.36, layer2: 0.42, overlay: 0.65, sidebar: 0.36 };
 
     /** A `null` palette leaves the built-in appearance untouched. */
     const SKINS = [
@@ -275,14 +290,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Build the token override layer for one skin.
+     * Build the token override layer.
      *
      * Without a wallpaper a skin replaces the palette outright. With one, the canvas
-     * becomes transparent and the surface layers turn transparent by `panel`, so the
-     * image is actually visible instead of sitting behind opaque panels; the built-in
-     * appearance uses the neutral glass colors because it has no palette of its own.
+     * becomes transparent, surfaces become glass, and labels follow `direction`, so a
+     * dark wall gets light text (and dark glass) whatever the light/dark appearance is.
      */
-    function buildTokens(skin, wallpaper, panel) {
+    function buildTokens(skin, wallpaper, panel, direction) {
       const isDefault = skin.light === null || skin.dark === null;
       if (!wallpaper) {
         if (isDefault) return null;
@@ -296,21 +310,26 @@ window.__ModuleLoader__.load({
         return plain;
       }
 
-      const light = isDefault ? NEUTRAL.light : skin.light;
-      const dark = isDefault ? NEUTRAL.dark : skin.dark;
+      const glass = GLASS[direction] ?? GLASS.darkText;
       const transparency = clamp(panel, 0, 0.85);
-      const tokens = { [TOKEN.base]: { light: 'transparent', dark: 'transparent' } };
+      const tokens = {
+        [TOKEN.base]: { light: 'transparent', dark: 'transparent' },
+        // Both scheme slots carry the same value: the text answers to the wallpaper.
+        [TOKEN.text]: { light: glass.text, dark: glass.text },
+        [TOKEN.muted]: { light: glass.muted, dark: glass.muted },
+        [TOKEN.border1]: { light: glass.border1, dark: glass.border1 },
+        [TOKEN.border2]: { light: glass.border2, dark: glass.border2 },
+      };
 
       for (const key of ['layer1', 'layer2', 'overlay', 'sidebar']) {
-        const alpha = clamp(1 - transparency * SURFACE_FACTORS[key], 0.1, 0.98);
-        tokens[TOKEN[key]] = { light: withAlpha(light[key], alpha), dark: withAlpha(dark[key], alpha) };
+        const alpha = clamp(1 - transparency * SURFACE_FACTORS[key], SURFACE_FLOORS[key], 0.98);
+        tokens[TOKEN[key]] = { light: withAlpha(glass[key], alpha), dark: withAlpha(glass[key], alpha) };
       }
-      tokens[TOKEN.border1] = { light: light.border1, dark: dark.border1 };
-      tokens[TOKEN.border2] = { light: light.border2, dark: dark.border2 };
 
       if (!isDefault) {
-        for (const key of ['brand', 'text', 'muted', 'success', 'warn', 'error', 'idle']) {
-          tokens[TOKEN[key]] = { light: skin.light[key], dark: skin.dark[key] };
+        const accent = direction === 'lightText' ? skin.dark : skin.light;
+        for (const key of ['brand', 'success', 'warn', 'error', 'idle']) {
+          tokens[TOKEN[key]] = { light: accent[key], dark: accent[key] };
         }
       }
       return tokens;
@@ -326,6 +345,51 @@ window.__ModuleLoader__.load({
 
     function isImageSource(value) {
       return /^(https?:\/\/|data:image\/)/i.test(String(value).trim());
+    }
+
+    /**
+     * Average brightness of a wallpaper, 0 (black) to 1 (white), reduced to one
+     * pixel. Cross-origin images without CORS headers taint the canvas, so the
+     * result is `null` there and the caller falls back to the appearance scheme.
+     */
+    function measureLuminance(src) {
+      return new Promise((resolve) => {
+        const image = new Image();
+        image.crossOrigin = 'anonymous';
+        image.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1;
+            canvas.height = 1;
+            const context = canvas.getContext('2d');
+            if (context === null) {
+              resolve(null);
+              return;
+            }
+            context.drawImage(image, 0, 0, 1, 1);
+            const data = context.getImageData(0, 0, 1, 1).data;
+            resolve((0.2126 * data[0] + 0.7152 * data[1] + 0.0722 * data[2]) / 255);
+          } catch (error) {
+            resolve(null);
+          }
+        };
+        image.onerror = () => resolve(null);
+        image.src = src;
+      });
+    }
+
+    /**
+     * Which way the glass reads: `lightText` on a dark wall, `darkText` on a bright
+     * one. An explicit choice wins; otherwise the measured brightness decides, and
+     * an unmeasurable image falls back to the appearance scheme.
+     */
+    function resolveDirection(text, luminance, scheme) {
+      if (text === 'light') return 'lightText';
+      if (text === 'dark') return 'darkText';
+      if (typeof luminance === 'number' && Number.isFinite(luminance)) {
+        return luminance < 0.5 ? 'lightText' : 'darkText';
+      }
+      return scheme === 'dark' ? 'lightText' : 'darkText';
     }
 
     /** Downscale a chosen file in the browser, then keep it as a JPEG data URL. */
@@ -361,7 +425,7 @@ window.__ModuleLoader__.load({
     }
 
     function defaultState() {
-      return { skin: 'default', wallpaper: null, dim: 0.18, panel: 0.35, message: null };
+      return { skin: 'default', wallpaper: null, dim: 0.18, panel: 0.35, text: 'auto', luminance: null, message: null };
     }
 
     function loadState() {
@@ -383,6 +447,11 @@ window.__ModuleLoader__.load({
             : null;
         const legacy = parsed.panel === undefined;
         const storedDim = parsed.dim === undefined ? 0.18 : clamp(parsed.dim, 0, 0.85);
+        const text = parsed.text === 'light' || parsed.text === 'dark' ? parsed.text : 'auto';
+        const luminance =
+          typeof parsed.luminance === 'number' && Number.isFinite(parsed.luminance)
+            ? Math.min(1, Math.max(0, parsed.luminance))
+            : null;
         return {
           skin,
           wallpaper,
@@ -390,6 +459,8 @@ window.__ModuleLoader__.load({
           // defaults; start it lighter so the image reads, and let the slider raise it.
           dim: legacy ? Math.min(storedDim, 0.18) : storedDim,
           panel: legacy ? 0.35 : clamp(parsed.panel, 0, 0.85),
+          text,
+          luminance,
           message: null,
         };
       } catch (error) {
@@ -401,7 +472,14 @@ window.__ModuleLoader__.load({
       try {
         window.localStorage.setItem(
           STORE_KEY,
-          JSON.stringify({ skin: state.skin, wallpaper: state.wallpaper, dim: state.dim, panel: state.panel }),
+          JSON.stringify({
+            skin: state.skin,
+            wallpaper: state.wallpaper,
+            dim: state.dim,
+            panel: state.panel,
+            text: state.text,
+            luminance: state.luminance,
+          }),
         );
         return true;
       } catch (error) {
@@ -484,6 +562,22 @@ window.__ModuleLoader__.load({
       }
       .dsh-skins__input:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
       .dsh-skins__range { width: 132px; accent-color: var(--dsw-alias-brand-primary); }
+      .dsh-skins__seg {
+        display: inline-flex; border: 1px solid var(--dsw-alias-border-l2);
+        border-radius: 8px; overflow: hidden;
+      }
+      .dsh-skins__seg-btn {
+        height: 26px; padding: 0 10px; border: 0; background: transparent;
+        color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer;
+        transition: background-color 160ms ease, color 160ms ease;
+      }
+      .dsh-skins__seg-btn + .dsh-skins__seg-btn { border-left: 1px solid var(--dsw-alias-border-l1); }
+      .dsh-skins__seg-btn[aria-pressed='true'] {
+        background: var(--dsw-alias-bg-layer-2);
+        color: var(--dsw-alias-label-primary);
+        font-weight: 500;
+      }
+      .dsh-skins__seg-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
       .dsh-skins__value { font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
       .dsh-skins__stack { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
       .dsh-skins__sliders { display: flex; flex-direction: column; gap: 8px; flex: 1 1 240px; min-width: 0; }
@@ -517,12 +611,13 @@ window.__ModuleLoader__.load({
         return active !== null && active !== undefined && active.colorScheme === 'dark' ? 'dark' : 'light';
       };
 
-      const activePalette = (skin) => {
-        if (skin.light === null || skin.dark === null) return null;
-        return scheme() === 'dark' ? skin.dark : skin.light;
-      };
+      /** Which way the glass reads for this state: light labels on dark glass, or the reverse. */
+      const directionOf = (state) => resolveDirection(state.text, state.luminance, scheme());
 
-      /** Rewrite the wallpaper stylesheet; the scrim and canvas colour follow the active scheme. */
+      /**
+       * Rewrite the wallpaper stylesheet. The scrim follows the glass direction, and
+       * text over the image gets a matching halo so labels survive busy photos.
+       */
       const paint = (state) => {
         if (styleElement === null) return;
         const wallpaper = state.wallpaper;
@@ -530,10 +625,13 @@ window.__ModuleLoader__.load({
           styleElement.textContent = '';
           return;
         }
-        const palette = activePalette(findSkin(state.skin));
+        const lightText = directionOf(state) === 'lightText';
         const dim = clamp(state.dim, 0, 0.85);
-        const tint = scheme() === 'dark' ? '0, 0, 0' : '255, 255, 255';
-        let css = `
+        const tint = lightText ? '0, 0, 0' : '255, 255, 255';
+        const halo = lightText
+          ? '0 1px 2px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 0, 0, 0.22)'
+          : '0 1px 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 255, 255, 0.3)';
+        styleElement.textContent = `
           html, body {
             background-image: linear-gradient(rgba(${tint}, ${dim}), rgba(${tint}, ${dim})), url("${cssUrl(wallpaper.value)}") !important;
             background-size: cover !important;
@@ -541,9 +639,8 @@ window.__ModuleLoader__.load({
             background-repeat: no-repeat !important;
             background-attachment: fixed !important;
           }
+          body { text-shadow: ${halo}; }
         `;
-        if (palette !== null) css += `html { background-color: ${palette.base} !important; }`;
-        styleElement.textContent = css;
       };
 
       const applyLayer = (state) => {
@@ -551,7 +648,12 @@ window.__ModuleLoader__.load({
           layerOff();
           layerOff = null;
         }
-        const tokens = buildTokens(findSkin(state.skin), state.wallpaper !== null, state.panel);
+        const tokens = buildTokens(
+          findSkin(state.skin),
+          state.wallpaper !== null,
+          state.panel,
+          directionOf(state),
+        );
         if (tokens === null) return;
         layerOff = ctx.theme.overrideTokens('dsh-skins', tokens);
       };
@@ -606,9 +708,36 @@ window.__ModuleLoader__.load({
         return true;
       };
 
-      // Theme layers carry both schemes, but the wallpaper scrim and canvas colour
-      // are per-scheme CSS, so a light/dark switch repaints the stylesheet.
-      ctx.effect(() => ctx.on('theme/change', () => paint(store.get())), 'skins: scheme follow');
+      // Our own layer rebuilds also emit theme/change, so only an actual light/dark
+      // switch may rebuild the layer; every emission still repaints the stylesheet.
+      let lastScheme = scheme();
+      ctx.effect(
+        () =>
+          ctx.on('theme/change', () => {
+            const next = scheme();
+            const switched = next !== lastScheme;
+            lastScheme = next;
+            paint(store.get());
+            if (switched) applyLayer(store.get());
+          }),
+        'skins: scheme follow',
+      );
+
+      /**
+       * A wallpaper saved before the text mode existed has no brightness reading.
+       * Measure it once at boot so the glass direction follows the image.
+       */
+      const backfillLuminance = () => {
+        const state = store.get();
+        if (state.wallpaper === null || state.luminance !== null) return;
+        const source = state.wallpaper.value;
+        void measureLuminance(source).then((luminance) => {
+          if (luminance === null) return;
+          const current = store.get();
+          if (current.wallpaper === null || current.wallpaper.value !== source) return;
+          commit({ luminance }, { deferPersist: true });
+        });
+      };
 
       ctx.effect(() => {
         const element = document.createElement('style');
@@ -616,6 +745,7 @@ window.__ModuleLoader__.load({
         document.head.appendChild(element);
         styleElement = element;
         applyAll(store.get());
+        backfillLuminance();
         return () => {
           element.remove();
           styleElement = null;
@@ -689,13 +819,18 @@ window.__ModuleLoader__.load({
               commit({ message: 'storageFull' });
               return;
             }
-            if (commit({ wallpaper: { kind: 'data', value: dataUrl }, message: null })) {
+            const luminance = await measureLuminance(dataUrl);
+            if (commit({ wallpaper: { kind: 'data', value: dataUrl }, luminance, message: null })) {
               setUrl('');
               return;
             }
             // The browser refused the first write; retry the whole image at a smaller encode.
             const compact = await shrinkImage(file, 1100, 0.65);
-            if (compact.length > MAX_IMAGE_CHARS || !commit({ wallpaper: { kind: 'data', value: compact }, message: null })) {
+            const compactLuminance = compact.length > MAX_IMAGE_CHARS ? null : await measureLuminance(compact);
+            if (
+              compact.length > MAX_IMAGE_CHARS ||
+              !commit({ wallpaper: { kind: 'data', value: compact }, luminance: compactLuminance, message: null })
+            ) {
               commit({ message: 'storageFull' });
             }
           } catch (error) {
@@ -720,7 +855,17 @@ window.__ModuleLoader__.load({
             commit({ message: 'invalidUrl' });
             return;
           }
-          if (commit({ wallpaper: { kind: 'url', value }, message: null })) setUrl('');
+          // Remote images without CORS cannot be measured; the auto mode then follows
+          // the appearance scheme until a measurable image arrives.
+          if (commit({ wallpaper: { kind: 'url', value }, luminance: null, message: null })) {
+            setUrl('');
+            void measureLuminance(value).then((luminance) => {
+              const current = store.get();
+              if (luminance === null) return;
+              if (current.wallpaper === null || current.wallpaper.value !== value) return;
+              commit({ luminance }, { deferPersist: true });
+            });
+          }
         };
 
         return h(
@@ -880,6 +1025,32 @@ window.__ModuleLoader__.load({
                             ),
                         }),
                         h('span', { className: 'dsh-skins__value' }, Math.round(state.panel * 100) + '%'),
+                      ),
+                      h(
+                        'div',
+                        { key: 'text', className: 'dsh-skins__slider-row' },
+                        h('span', { className: 'dsh-skins__label' }, t('textMode')),
+                        h(
+                          'div',
+                          { className: 'dsh-skins__seg', role: 'group', 'aria-label': t('textMode') },
+                          [
+                            ['auto', 'auto'],
+                            ['light', 'lightText'],
+                            ['dark', 'darkText'],
+                          ].map(([value, label]) =>
+                            h(
+                              'button',
+                              {
+                                key: value,
+                                type: 'button',
+                                className: 'dsh-skins__seg-btn',
+                                'aria-pressed': state.text === value,
+                                onClick: () => commit({ text: value }),
+                              },
+                              t(label),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   )

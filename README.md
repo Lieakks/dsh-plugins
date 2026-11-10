@@ -35,7 +35,8 @@ plugin_manager install_bundle target=G:\DSH_WorkSpace\dsh-account-balance
 - **挂载点**：`settings.section` + `settings.section.icon`，id `skins`，order 5（常规之后、模型之前）
 - **配色皮肤**：默认 / 极光青 / 暖沙 / 森林 / 霓虹紫，每套同时定义浅色与深色，通过 `ctx.theme.overrideTokens` 覆盖 14 个 alias token，不碰主题注册表，可随时退回默认。
 - **背景图**：本地文件（浏览器内压到最长边 1920 的 JPEG，失败自动降档到 1280 / 1100）或粘贴 http(s)/data 链接；`本地路径` 会被单独识别并提示改用文件选择。
-- **可调**：`暗化`（0–85%，浅色外观白色蒙层、深色外观黑色蒙层）与 `面板通透度`（0–85%，控制卡片/侧栏/弹层的透明程度）。
+- **可调**：`暗化`（0–85%）、`面板通透度`（0–85%，控制卡片/侧栏/弹层的透明程度）、`文字对比度`（自动 / 浅字 / 深字）。
+- **文字适配**：设了壁纸后，界面按"深底浅字"或"浅底深字"整体取向——先把壁纸缩成 1×1 量平均亮度（<0.5 判为深色壁纸），再同时切换面板底色与文字色，并给正文加一层同向描边；面板另设最低不透明度地板（卡片 36%、弹层 65%），避免拉到最透时设置页和工作区文字糊在图片上。
 - **存储**：`localStorage["dsh-skins:state:v1"]`，仅本机浏览器生效，不随账号同步。
 
 ## dsh-quota-meter
@@ -48,10 +49,11 @@ plugin_manager install_bundle target=G:\DSH_WorkSpace\dsh-account-balance
 
 ## 已知限制
 
-- 两个插件的外观都只在真实页面里人工确认过，没有自动化截图或视觉回归。
+- 三个插件的外观都只在真实页面里人工确认过，没有自动化截图或视觉回归。
 - 壁纸依赖界面用 `--dsw-alias-bg-base` 铺画布；若某个界面区域自带不透明底色，那部分就不会透出图片。
+- 远程壁纸若不允许跨域读取（没有 CORS 头），画布无法测量亮度，`文字对比度=自动` 会退化为跟随外观的浅色/深色。
 - 皮肤与壁纸选择都是浏览器本地状态，换浏览器或清缓存会回到默认。
 
 ## 历史位置
 
-`dsh-quota-meter` 原先位于 `C:\Users\Administrator\Documents\deepseek-harness\default-workspace\plugins\dsh-quota-meter`，现已复制进本仓库并把 profile 的 `link:` 指向 `G:\DSH_WorkSpace\dsh-quota-meter`。原目录不再被引用，确认无其他用途后可以删除。
+`dsh-quota-meter` 原先位于 `C:\Users\Administrator\Documents\deepseek-harness\default-workspace\plugins\dsh-quota-meter`，现已复制进本仓库、profile 的 `link:` 指向 `G:\DSH_WorkSpace\dsh-quota-meter`，原目录已删除。
