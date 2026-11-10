@@ -26,6 +26,7 @@ window.__ModuleLoader__.load({
         remove: 'Remove',
         dim: 'Dim',
         panel: 'Panel transparency',
+        veil: 'Backdrop veil',
         panelShade: 'Panel shade',
         auto: 'Auto',
         darkGlass: 'Dark',
@@ -59,6 +60,7 @@ window.__ModuleLoader__.load({
         remove: '移除',
         dim: '暗化',
         panel: '面板通透度',
+        veil: '遮罩浓度',
         panelShade: '面板明暗',
         auto: '自动',
         darkGlass: '深色',
@@ -488,6 +490,7 @@ window.__ModuleLoader__.load({
         wallpaper: null,
         dim: 0.18,
         panel: 0.35,
+        veil: 0.55,
         shade: 'auto',
         textTheme: 'auto',
         textPrimary: null,
@@ -535,6 +538,7 @@ window.__ModuleLoader__.load({
           // defaults; start it lighter so the image reads, and let the slider raise it.
           dim: legacy ? Math.min(storedDim, 0.18) : storedDim,
           panel: legacy ? 0.35 : clamp(parsed.panel, 0, 0.85),
+          veil: parsed.veil === undefined ? 0.55 : clamp(parsed.veil, 0, 0.9),
           shade,
           textTheme,
           textPrimary: color(parsed.textPrimary),
@@ -556,6 +560,7 @@ window.__ModuleLoader__.load({
             wallpaper: state.wallpaper,
             dim: state.dim,
             panel: state.panel,
+            veil: state.veil,
             shade: state.shade,
             textTheme: state.textTheme,
             textPrimary: state.textPrimary,
@@ -808,7 +813,11 @@ window.__ModuleLoader__.load({
         const halo = lightText
           ? '0 1px 2px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 0, 0, 0.22)'
           : '0 1px 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 255, 255, 0.3)';
-        const frost = glassDark ? 'rgba(12, 16, 20, 0.92)' : 'rgba(252, 252, 253, 0.93)';
+        // A veil, not a paint-over: enough fill to calm the page behind a modal,
+        // low enough that the app is still recognisable through the blur. The user
+        // can dial it down to zero and keep only the blur.
+        const veil = clamp(state.veil, 0, 0.9);
+        const frost = glassDark ? `rgba(14, 18, 22, ${veil})` : `rgba(250, 250, 251, ${veil})`;
         styleElement.textContent = `
           html, body {
             background-image: linear-gradient(rgba(${tint}, ${dim}), rgba(${tint}, ${dim})), url("${cssUrl(wallpaper.value)}") !important;
@@ -820,7 +829,7 @@ window.__ModuleLoader__.load({
           body { text-shadow: ${halo}; }
           [${BACKDROP_ATTR}] {
             background-color: ${frost} !important;
-            backdrop-filter: blur(26px) saturate(1.06);
+            backdrop-filter: blur(22px) saturate(1.06);
           }
           [${BACKDROP_ATTR}], [${BACKDROP_ATTR}] * { text-shadow: none; }
         `;
@@ -1235,6 +1244,26 @@ window.__ModuleLoader__.load({
                             ),
                         }),
                         h('span', { className: 'dsh-skins__value' }, Math.round(state.panel * 100) + '%'),
+                      ),
+                      h(
+                        'div',
+                        { key: 'veil', className: 'dsh-skins__slider-row' },
+                        h('span', { className: 'dsh-skins__label' }, t('veil')),
+                        h('input', {
+                          type: 'range',
+                          className: 'dsh-skins__range',
+                          min: 0,
+                          max: 90,
+                          step: 1,
+                          value: Math.round(state.veil * 100),
+                          'aria-label': t('veil'),
+                          onChange: (event) =>
+                            commit(
+                              { veil: clamp(Number(event.target.value) / 100, 0, 0.9) },
+                              { deferPersist: true, layer: false },
+                            ),
+                        }),
+                        h('span', { className: 'dsh-skins__value' }, Math.round(state.veil * 100) + '%'),
                       ),
                       h(
                         'div',
