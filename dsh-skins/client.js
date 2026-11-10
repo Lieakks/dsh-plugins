@@ -723,7 +723,14 @@ window.__ModuleLoader__.load({
         const width = window.innerWidth;
         const height = window.innerHeight;
         if (rect.width < width * 0.4 || rect.height < height * 0.4) return false;
-        if (rect.width >= width * 0.98 && rect.height >= height * 0.98) return false;
+        // A mask spans at least one axis (the Windows caption leaves its top edge
+        // unpainted), so any near-full axis disqualifies: painting it would white
+        // out the whole app instead of giving the panel a surface.
+        if (rect.width >= width * 0.95 || rect.height >= height * 0.95) return false;
+        if (rect.width * rect.height > width * height * 0.8) return false;
+        // A scrim carries no text; a panel always carries its title and content.
+        const text = element.textContent;
+        if (text === null || text.trim() === '') return false;
         return true;
       };
 
@@ -736,7 +743,11 @@ window.__ModuleLoader__.load({
         }
       };
 
-      /** Mark every open panel overlay so the stylesheet can put a readable surface under it. */
+      /**
+       * Mark every open panel overlay so the stylesheet can put a readable surface
+       * under it. Only the innermost match is painted: a wrapper that merely contains
+       * the panel must never receive an opaque fill, which is what a mask is.
+       */
       const scanOverlays = () => {
         if (styleElement === null) return;
         if (store.get().wallpaper === null) {
@@ -746,14 +757,12 @@ window.__ModuleLoader__.load({
         const marked = new Set();
         for (const root of document.body.children) {
           if (root.id === 'root' || root === styleElement) continue;
-          if (looksLikePanel(root)) {
-            root.setAttribute(SUBSTRATE_ATTR, '');
-            marked.add(root);
-          }
-          const candidates = [];
-          collectCandidates(root, 1, candidates);
-          for (const element of candidates) {
-            if (!looksLikePanel(element)) continue;
+          const nodes = [root];
+          collectCandidates(root, 1, nodes);
+          const matches = nodes.filter(looksLikePanel);
+          for (const element of matches) {
+            const containsMatch = matches.some((other) => other !== element && element.contains(other));
+            if (containsMatch) continue;
             element.setAttribute(SUBSTRATE_ATTR, '');
             marked.add(element);
           }
