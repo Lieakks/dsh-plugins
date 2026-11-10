@@ -91,6 +91,9 @@ window.__ModuleLoader__.load({
       brand: '--dsw-alias-brand-primary',
       text: '--dsw-alias-label-primary',
       muted: '--dsw-alias-label-secondary',
+      // Extra muted aliases some components use; harmless when a deployment never reads them.
+      tertiary: '--dsw-alias-label-tertiary',
+      disabled: '--dsw-alias-label-disabled',
       success: '--dsw-alias-state-success-primary',
       warn: '--dsw-alias-state-warn-primary',
       error: '--dsw-alias-state-error-primary',
@@ -369,6 +372,11 @@ window.__ModuleLoader__.load({
         [TOKEN.muted]: { light: text.muted, dark: text.muted },
         [TOKEN.border1]: { light: glass.border1, dark: glass.border1 },
         [TOKEN.border2]: { light: glass.border2, dark: glass.border2 },
+        // Tertiary and disabled labels are not in the documented token set, but the
+        // sparse grey copy under plugin rows uses them; pin them to the muted colour
+        // so the text palette really covers every grey the UI draws.
+        [TOKEN.tertiary]: { light: text.muted, dark: text.muted },
+        [TOKEN.disabled]: { light: text.muted, dark: text.muted },
       };
 
       for (const key of ['layer1', 'layer2', 'overlay', 'sidebar']) {
@@ -696,45 +704,47 @@ window.__ModuleLoader__.load({
       /** Which way the glass reads for this state: light labels on dark glass, or the reverse. */
       const directionOf = (state) => resolveDirection(state.shade, state.luminance, scheme());
 
-      /** Modals, dialogs and other large overlays get a substrate; see scanOverlays below. */
-      const SUBSTRATE_ATTR = 'data-dsh-skins-surface';
+      /**
+       * Backdrop layers — the modal mask and the panel surface sitting on it — get a
+       * frosted fill. Detecting the backdrop (a viewport-sized layer that already
+       * paints a scrim) turned out to be far more reliable than guessing which
+       * element is "the panel": the settings panel can be nearly viewport-sized.
+       */
+      const BACKDROP_ATTR = 'data-dsh-skins-backdrop';
       let scanTimer = null;
 
-      const stripOverlays = () => {
-        for (const element of document.querySelectorAll(`[${SUBSTRATE_ATTR}]`)) {
-          element.removeAttribute(SUBSTRATE_ATTR);
+      const stripBackdrops = () => {
+        for (const element of document.querySelectorAll(`[${BACKDROP_ATTR}]`)) {
+          element.removeAttribute(BACKDROP_ATTR);
         }
       };
 
+      /** Alpha of a computed CSS colour; `1` when it cannot be parsed. */
+      const colorAlpha = (color) => {
+        const match = /^rgba?\(([^)]+)\)$/i.exec(String(color).trim());
+        if (match === null) return 1;
+        const parts = match[1].split(',').map((part) => part.trim());
+        return parts.length >= 4 ? Number(parts[3]) : 1;
+      };
+
       /**
-       * A panel-shaped overlay: fixed or absolute, at least 40% of the viewport in
-       * both directions (so menus and tooltips stay out), and smaller than the whole
-       * viewport (so the modal mask itself stays out). The settings panel portals
-       * beside `#root`, which is why the scan looks at body children and their
-       * direct children only.
+       * A backdrop: fixed or absolute, covering at least 90% of the viewport in both
+       * directions, still taking pointer events, and already painting some scrim of
+       * its own. That excludes app shells (transparent), toast regions (no pointer
+       * events), and ordinary panels that are smaller than the window.
        */
-      const looksLikePanel = (element) => {
+      const looksLikeBackdrop = (element) => {
         if (!(element instanceof HTMLElement)) return false;
         const style = getComputedStyle(element);
         if (style.position !== 'fixed' && style.position !== 'absolute') return false;
         if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        if (style.pointerEvents === 'none') return false;
         const rect = element.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return false;
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-        if (rect.width < width * 0.4 || rect.height < height * 0.4) return false;
-        // A mask spans at least one axis (the Windows caption leaves its top edge
-        // unpainted), so any near-full axis disqualifies: painting it would white
-        // out the whole app instead of giving the panel a surface.
-        if (rect.width >= width * 0.95 || rect.height >= height * 0.95) return false;
-        if (rect.width * rect.height > width * height * 0.8) return false;
-        // A scrim carries no text; a panel always carries its title and content.
-        const text = element.textContent;
-        if (text === null || text.trim() === '') return false;
-        return true;
+        if (rect.width < window.innerWidth * 0.9 || rect.height < window.innerHeight * 0.9) return false;
+        return colorAlpha(style.backgroundColor) > 0.05;
       };
 
-      /** Collect a portal root and two levels below it, where panels and masks sit. */
+      /** Collect a portal root and two levels below it, where masks and panels sit. */
       const collectCandidates = (root, depth, out) => {
         if (depth > 2) return;
         for (const child of root.children) {
@@ -743,15 +753,11 @@ window.__ModuleLoader__.load({
         }
       };
 
-      /**
-       * Mark every open panel overlay so the stylesheet can put a readable surface
-       * under it. Only the innermost match is painted: a wrapper that merely contains
-       * the panel must never receive an opaque fill, which is what a mask is.
-       */
-      const scanOverlays = () => {
+      /** Frost every open backdrop layer; clear markers that no longer match. */
+      const scanBackdrops = () => {
         if (styleElement === null) return;
         if (store.get().wallpaper === null) {
-          stripOverlays();
+          stripBackdrops();
           return;
         }
         const marked = new Set();
@@ -759,16 +765,14 @@ window.__ModuleLoader__.load({
           if (root.id === 'root' || root === styleElement) continue;
           const nodes = [root];
           collectCandidates(root, 1, nodes);
-          const matches = nodes.filter(looksLikePanel);
-          for (const element of matches) {
-            const containsMatch = matches.some((other) => other !== element && element.contains(other));
-            if (containsMatch) continue;
-            element.setAttribute(SUBSTRATE_ATTR, '');
+          for (const element of nodes) {
+            if (!looksLikeBackdrop(element)) continue;
+            element.setAttribute(BACKDROP_ATTR, '');
             marked.add(element);
           }
         }
-        for (const element of document.querySelectorAll(`[${SUBSTRATE_ATTR}]`)) {
-          if (!marked.has(element)) element.removeAttribute(SUBSTRATE_ATTR);
+        for (const element of document.querySelectorAll(`[${BACKDROP_ATTR}]`)) {
+          if (!marked.has(element)) element.removeAttribute(BACKDROP_ATTR);
         }
       };
 
@@ -776,27 +780,27 @@ window.__ModuleLoader__.load({
         if (scanTimer !== null) return;
         scanTimer = setTimeout(() => {
           scanTimer = null;
-          scanOverlays();
+          scanBackdrops();
         }, 180);
       };
 
       /**
-       * Rewrite the wallpaper stylesheet. The scrim follows the glass direction, text
-       * over the image gets a matching halo, and open panels get an opaque glass
-       * substrate so Settings cannot blend into the page behind it.
+       * Rewrite the wallpaper stylesheet. The scrim follows the text colour, text
+       * over the image gets a matching halo, and every open backdrop layer becomes a
+       * frosted surface so Settings cannot blend into the page behind it.
        */
       const paint = (state) => {
         if (styleElement === null) return;
         const wallpaper = state.wallpaper;
         if (wallpaper === null) {
           styleElement.textContent = '';
-          stripOverlays();
+          stripBackdrops();
           return;
         }
         const direction = directionOf(state);
         const text = resolveTextColors(state, direction);
         const primaryLuminance = hexLuminance(text.primary);
-        // The scrim and halo answer to the text colour, the panel substrate to the glass.
+        // The scrim and halo answer to the text colour, the frost to the glass shade.
         const lightText = primaryLuminance === null ? direction === 'lightText' : primaryLuminance > 0.55;
         const glassDark = direction === 'lightText';
         const dim = clamp(state.dim, 0, 0.85);
@@ -804,7 +808,7 @@ window.__ModuleLoader__.load({
         const halo = lightText
           ? '0 1px 2px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 0, 0, 0.22)'
           : '0 1px 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 255, 255, 0.3)';
-        const substrate = glassDark ? 'rgba(10, 13, 16, 0.92)' : 'rgba(255, 255, 255, 0.94)';
+        const frost = glassDark ? 'rgba(12, 16, 20, 0.92)' : 'rgba(252, 252, 253, 0.93)';
         styleElement.textContent = `
           html, body {
             background-image: linear-gradient(rgba(${tint}, ${dim}), rgba(${tint}, ${dim})), url("${cssUrl(wallpaper.value)}") !important;
@@ -814,12 +818,11 @@ window.__ModuleLoader__.load({
             background-attachment: fixed !important;
           }
           body { text-shadow: ${halo}; }
-          [${SUBSTRATE_ATTR}] {
-            background-color: ${substrate} !important;
-            backdrop-filter: blur(18px) saturate(1.05);
-            box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55);
+          [${BACKDROP_ATTR}] {
+            background-color: ${frost} !important;
+            backdrop-filter: blur(26px) saturate(1.06);
           }
-          [${SUBSTRATE_ATTR}], [${SUBSTRATE_ATTR}] * { text-shadow: none; }
+          [${BACKDROP_ATTR}], [${BACKDROP_ATTR}] * { text-shadow: none; }
         `;
         scheduleScan();
       };
@@ -948,14 +951,14 @@ window.__ModuleLoader__.load({
             clearTimeout(scanTimer);
             scanTimer = null;
           }
-          stripOverlays();
+          stripBackdrops();
         };
       }, 'skins: wallpaper stylesheet');
 
       /**
-       * Panels open and close as portals appended beside `#root`, so the substrate
-       * scan has to follow document mutations rather than only mount time. The
-       * debounce keeps a busy page at one scan per gesture.
+       * Backdrop layers open and close as portals appended beside `#root`, so the
+       * scan follows document mutations rather than only mount time. The debounce
+       * keeps a busy page at one scan per gesture.
        */
       ctx.effect(() => {
         if (typeof MutationObserver !== 'function') return undefined;
