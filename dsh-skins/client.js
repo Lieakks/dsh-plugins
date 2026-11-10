@@ -614,15 +614,92 @@ window.__ModuleLoader__.load({
       /** Which way the glass reads for this state: light labels on dark glass, or the reverse. */
       const directionOf = (state) => resolveDirection(state.text, state.luminance, scheme());
 
+      /** Modals, dialogs and other large overlays get a substrate; see scanOverlays below. */
+      const SUBSTRATE_ATTR = 'data-dsh-skins-surface';
+      let scanTimer = null;
+
+      const stripOverlays = () => {
+        for (const element of document.querySelectorAll(`[${SUBSTRATE_ATTR}]`)) {
+          element.removeAttribute(SUBSTRATE_ATTR);
+        }
+      };
+
       /**
-       * Rewrite the wallpaper stylesheet. The scrim follows the glass direction, and
-       * text over the image gets a matching halo so labels survive busy photos.
+       * A panel-shaped overlay: fixed or absolute, at least 40% of the viewport in
+       * both directions (so menus and tooltips stay out), and smaller than the whole
+       * viewport (so the modal mask itself stays out). The settings panel portals
+       * beside `#root`, which is why the scan looks at body children and their
+       * direct children only.
+       */
+      const looksLikePanel = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        if (style.position !== 'fixed' && style.position !== 'absolute') return false;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        if (rect.width < width * 0.4 || rect.height < height * 0.4) return false;
+        if (rect.width >= width * 0.98 && rect.height >= height * 0.98) return false;
+        return true;
+      };
+
+      /** Collect a portal root and two levels below it, where panels and masks sit. */
+      const collectCandidates = (root, depth, out) => {
+        if (depth > 2) return;
+        for (const child of root.children) {
+          out.push(child);
+          collectCandidates(child, depth + 1, out);
+        }
+      };
+
+      /** Mark every open panel overlay so the stylesheet can put a readable surface under it. */
+      const scanOverlays = () => {
+        if (styleElement === null) return;
+        if (store.get().wallpaper === null) {
+          stripOverlays();
+          return;
+        }
+        const marked = new Set();
+        for (const root of document.body.children) {
+          if (root.id === 'root' || root === styleElement) continue;
+          if (looksLikePanel(root)) {
+            root.setAttribute(SUBSTRATE_ATTR, '');
+            marked.add(root);
+          }
+          const candidates = [];
+          collectCandidates(root, 1, candidates);
+          for (const element of candidates) {
+            if (!looksLikePanel(element)) continue;
+            element.setAttribute(SUBSTRATE_ATTR, '');
+            marked.add(element);
+          }
+        }
+        for (const element of document.querySelectorAll(`[${SUBSTRATE_ATTR}]`)) {
+          if (!marked.has(element)) element.removeAttribute(SUBSTRATE_ATTR);
+        }
+      };
+
+      const scheduleScan = () => {
+        if (scanTimer !== null) return;
+        scanTimer = setTimeout(() => {
+          scanTimer = null;
+          scanOverlays();
+        }, 180);
+      };
+
+      /**
+       * Rewrite the wallpaper stylesheet. The scrim follows the glass direction, text
+       * over the image gets a matching halo, and open panels get an opaque glass
+       * substrate so Settings cannot blend into the page behind it.
        */
       const paint = (state) => {
         if (styleElement === null) return;
         const wallpaper = state.wallpaper;
         if (wallpaper === null) {
           styleElement.textContent = '';
+          stripOverlays();
           return;
         }
         const lightText = directionOf(state) === 'lightText';
@@ -631,6 +708,7 @@ window.__ModuleLoader__.load({
         const halo = lightText
           ? '0 1px 2px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 0, 0, 0.22)'
           : '0 1px 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 255, 255, 0.3)';
+        const substrate = lightText ? 'rgba(10, 13, 16, 0.92)' : 'rgba(255, 255, 255, 0.94)';
         styleElement.textContent = `
           html, body {
             background-image: linear-gradient(rgba(${tint}, ${dim}), rgba(${tint}, ${dim})), url("${cssUrl(wallpaper.value)}") !important;
@@ -640,7 +718,14 @@ window.__ModuleLoader__.load({
             background-attachment: fixed !important;
           }
           body { text-shadow: ${halo}; }
+          [${SUBSTRATE_ATTR}] {
+            background-color: ${substrate} !important;
+            backdrop-filter: blur(18px) saturate(1.05);
+            box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55);
+          }
+          [${SUBSTRATE_ATTR}], [${SUBSTRATE_ATTR}] * { text-shadow: none; }
         `;
+        scheduleScan();
       };
 
       const applyLayer = (state) => {
@@ -761,8 +846,32 @@ window.__ModuleLoader__.load({
             layerOff();
             layerOff = null;
           }
+          if (scanTimer !== null) {
+            clearTimeout(scanTimer);
+            scanTimer = null;
+          }
+          stripOverlays();
         };
       }, 'skins: wallpaper stylesheet');
+
+      /**
+       * Panels open and close as portals appended beside `#root`, so the substrate
+       * scan has to follow document mutations rather than only mount time. The
+       * debounce keeps a busy page at one scan per gesture.
+       */
+      ctx.effect(() => {
+        if (typeof MutationObserver !== 'function') return undefined;
+        const observer = new MutationObserver(() => {
+          if (store.get().wallpaper !== null) scheduleScan();
+        });
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['style', 'class', 'hidden', 'aria-hidden'],
+        });
+        return () => observer.disconnect();
+      }, 'skins: overlay observer');
 
       function SkinIcon(props) {
         const size = typeof props.size === 'number' && props.size > 0 ? props.size : 18;
