@@ -142,10 +142,14 @@ window.__ModuleLoader__.load({
       },
     };
 
-    /** Surface alpha factors used while a wallpaper is set; the panel slider scales them. */
-    const SURFACE_FACTORS = { layer1: 0.9, layer2: 0.8, overlay: 0.5, sidebar: 1 };
-    /** Floors keep dense text areas readable at maximum transparency. */
-    const SURFACE_FLOORS = { layer1: 0.28, layer2: 0.32, overlay: 0.55, sidebar: 0.28 };
+    /**
+     * Surface alpha per layer while a wallpaper is set: `1 - transparency * factor`.
+     * The factors keep popovers (overlay) more solid than the canvas, and the single
+     * hard floor sits far enough out that the whole 0–95% slider range stays monotonic.
+     */
+    const SURFACE_FACTORS = { layer1: 0.95, layer2: 0.9, overlay: 0.6, sidebar: 0.95 };
+    /** Absolute minimum surface alpha, reached only at the very top of the range. */
+    const SURFACE_FLOOR = 0.06;
     /** Upper bound of the panel-transparency setting. */
     const MAX_PANEL = 0.95;
 
@@ -394,7 +398,7 @@ window.__ModuleLoader__.load({
       };
 
       for (const key of ['layer1', 'layer2', 'overlay', 'sidebar']) {
-        const alpha = clamp(1 - transparency * SURFACE_FACTORS[key], SURFACE_FLOORS[key], 0.98);
+        const alpha = clamp(1 - transparency * SURFACE_FACTORS[key], SURFACE_FLOOR, 0.98);
         tokens[TOKEN[key]] = { light: withAlpha(glass[key], alpha), dark: withAlpha(glass[key], alpha) };
       }
 
