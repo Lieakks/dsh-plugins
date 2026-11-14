@@ -1021,6 +1021,16 @@ window.__ModuleLoader__.load({
             transition: background-color 200ms ease, backdrop-filter 200ms ease;
           }
           [${BACKDROP_ATTR}], [${BACKDROP_ATTR}] * { text-shadow: none; }
+          /*
+           * A fullscreen right panel hangs over the centre column, and the panel paints
+           * the canvas colour we made transparent — so the conversation and its composer
+           * would read straight through it. Hide the column underneath instead of
+           * painting over it: the frame marks the mode, the column class carries the
+           * stable "centerCol" suffix, and visibility keeps DOM, drafts and scroll.
+           */
+          [data-rightbar-fullscreen] [class*='_centerCol'] {
+            visibility: hidden;
+          }
         `;
         scheduleScan();
       };
