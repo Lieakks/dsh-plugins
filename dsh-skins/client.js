@@ -7,9 +7,15 @@ window.__ModuleLoader__.load({
     const NS = 'skins';
     const STORE_KEY = 'dsh-skins:state:v1';
     /** Longest edge a chosen file is downscaled to before it is stored. */
-    const MAX_SIDE = 1920;
-    /** A data URL above this many characters cannot fit in the localStorage quota. */
-    const MAX_IMAGE_CHARS = 1800000;
+    const MAX_SIDE = 2560;
+    /** Refuse a wallpaper larger than this; IndexedDB is roomy but not unlimited. */
+    const MAX_BLOB_BYTES = 12 * 1024 * 1024;
+    /** IndexedDB database and object store holding the wallpaper binary. */
+    const DB_NAME = 'dsh-skins';
+    const DB_STORE = 'assets';
+    const WALLPAPER_KEY = 'wallpaper';
+    /** Alpha below this marks a sampled pixel as transparent. */
+    const ALPHA_THRESHOLD = 250;
 
     const DICT = {
       en: {
@@ -40,6 +46,8 @@ window.__ModuleLoader__.load({
         preview: 'Preview',
         note: 'Settings are stored in this browser only; images are downscaled before they are saved.',
         storageFull: 'That image is too large to store locally. Downscale it or paste a URL instead.',
+        tooLarge: 'That image is larger than 12 MB after encoding. Pick a smaller one.',
+        storageUnavailable: 'Browser storage is unavailable, so the image cannot be saved.',
         invalidUrl: 'Enter an http(s) image URL or a data image.',
         localPath: 'The browser cannot open a local file path. Use Choose image… instead.',
         decodeFailed: 'That file could not be read as an image.',
@@ -74,6 +82,8 @@ window.__ModuleLoader__.load({
         preview: '预览',
         note: '设置仅保存在本机浏览器；图片保存前会自动压缩。',
         storageFull: '图片太大，无法保存在本地。请先压缩，或改用图片链接。',
+        tooLarge: '图片编码后超过 12 MB，请换一张更小的。',
+        storageUnavailable: '浏览器存储不可用，图片无法保存。',
         invalidUrl: '请输入 http(s) 图片链接或 data 图片。',
         localPath: '浏览器无法直接读取本地文件路径，请改用“选择图片…”。',
         decodeFailed: '无法把该文件解析为图片。',
@@ -452,42 +462,170 @@ window.__ModuleLoader__.load({
       return scheme === 'dark' ? 'lightText' : 'darkText';
     }
 
-    /** Downscale a chosen file in the browser, then keep it as a JPEG data URL. */
-    function shrinkImage(file, maxSide, quality) {
-      const limit = typeof maxSide === 'number' && maxSide > 0 ? maxSide : MAX_SIDE;
-      const encode = typeof quality === 'number' && quality > 0 ? quality : 0.85;
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error('readFailed'));
-        reader.onload = () => {
-          const image = new Image();
-          image.onerror = () => reject(new Error('decodeFailed'));
-          image.onload = () => {
-            try {
-              const scale = Math.min(1, limit / Math.max(image.width, image.height));
-              const width = Math.max(1, Math.round(image.width * scale));
-              const height = Math.max(1, Math.round(image.height * scale));
-              const canvas = document.createElement('canvas');
-              canvas.width = width;
-              canvas.height = height;
-              const context = canvas.getContext('2d');
-              if (context === null) throw new Error('decodeFailed');
-              context.drawImage(image, 0, 0, width, height);
-              resolve(canvas.toDataURL('image/jpeg', encode));
-            } catch (error) {
-              reject(new Error('decodeFailed'));
-            }
+    /** Decode a picked file, honouring EXIF orientation where the browser supports it. */
+    async function decodeImage(file) {
+      if (typeof createImageBitmap === 'function') {
+        try {
+          const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+          return {
+            source: bitmap,
+            width: bitmap.width,
+            height: bitmap.height,
+            close: () => {
+              try {
+                bitmap.close();
+              } catch (error) {
+                // Already detached; nothing to release.
+              }
+            },
           };
-          image.src = String(reader.result);
+        } catch (error) {
+          // Fall through to the <img> path for formats createImageBitmap rejects.
+        }
+      }
+      const url = URL.createObjectURL(file);
+      try {
+        const element = await new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = () => reject(new Error('decodeFailed'));
+          image.src = url;
+        });
+        return {
+          source: element,
+          width: element.naturalWidth || element.width,
+          height: element.naturalHeight || element.height,
+          close: () => {},
         };
-        reader.readAsDataURL(file);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    /** Whether the scaled image keeps any pixel that is not fully opaque. */
+    function hasTransparency(source, width, height) {
+      try {
+        const limit = 64;
+        const scale = Math.min(1, limit / Math.max(width, height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const context = canvas.getContext('2d');
+        if (context === null) return false;
+        context.drawImage(source, 0, 0, canvas.width, canvas.height);
+        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        for (let index = 3; index < data.length; index += 4) {
+          if (data[index] < ALPHA_THRESHOLD) return true;
+        }
+        return false;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function canvasToBlob(canvas, type, quality) {
+      return new Promise((resolve) => {
+        if (typeof canvas.toBlob !== 'function') {
+          resolve(null);
+          return;
+        }
+        canvas.toBlob((blob) => resolve(blob ?? null), type, quality);
       });
     }
+
+    /**
+     * Downscale a picked file and encode it for storage. Images that use transparency
+     * keep their alpha (WebP when the browser can produce it, PNG otherwise); every
+     * other image becomes a high-quality JPEG. The longest edge is capped at
+     * `MAX_SIDE`, and pixels are never upscaled.
+     */
+    async function prepareWallpaper(file) {
+      const decoded = await decodeImage(file);
+      try {
+        const scale = Math.min(1, MAX_SIDE / Math.max(decoded.width, decoded.height));
+        const width = Math.max(1, Math.round(decoded.width * scale));
+        const height = Math.max(1, Math.round(decoded.height * scale));
+        const transparent = hasTransparency(decoded.source, decoded.width, decoded.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (context === null) throw new Error('decodeFailed');
+        context.drawImage(decoded.source, 0, 0, width, height);
+
+        let blob = null;
+        if (transparent) {
+          blob = await canvasToBlob(canvas, 'image/webp', 0.92);
+          if (blob !== null && blob.type !== 'image/webp') blob = null;
+          if (blob === null) blob = await canvasToBlob(canvas, 'image/png');
+        } else {
+          blob = await canvasToBlob(canvas, 'image/jpeg', 0.92);
+        }
+        if (blob === null) throw new Error('decodeFailed');
+        if (blob.size > MAX_BLOB_BYTES) throw new Error('tooLarge');
+        return { blob, width, height, transparent };
+      } finally {
+        decoded.close();
+      }
+    }
+
+    /** Open (and lazily create) the wallpaper database. */
+    function openWallpaperDb() {
+      return new Promise((resolve, reject) => {
+        if (typeof indexedDB === 'undefined') {
+          reject(new Error('storageUnavailable'));
+          return;
+        }
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error ?? new Error('storageUnavailable'));
+      });
+    }
+
+    /** Run one object-store operation and settle with the request's result. */
+    function runWallpaperStore(mode, operation) {
+      return openWallpaperDb().then(
+        (db) =>
+          new Promise((resolve, reject) => {
+            const transaction = db.transaction(DB_STORE, mode);
+            let request;
+            try {
+              request = operation(transaction.objectStore(DB_STORE));
+            } catch (error) {
+              db.close();
+              reject(error);
+              return;
+            }
+            transaction.oncomplete = () => {
+              db.close();
+              resolve(request === undefined ? undefined : request.result);
+            };
+            transaction.onerror = () => {
+              db.close();
+              reject(transaction.error ?? new Error('storageUnavailable'));
+            };
+            transaction.onabort = () => {
+              db.close();
+              reject(transaction.error ?? new Error('storageUnavailable'));
+            };
+          }),
+      );
+    }
+
+    const readWallpaperBlob = () => runWallpaperStore('readonly', (store) => store.get(WALLPAPER_KEY));
+    const writeWallpaperBlob = (blob) => runWallpaperStore('readwrite', (store) => store.put(blob, WALLPAPER_KEY));
+    const deleteWallpaperBlob = () => runWallpaperStore('readwrite', (store) => store.delete(WALLPAPER_KEY));
 
     function defaultState() {
       return {
         skin: 'default',
         wallpaper: null,
+        /** True when localStorage expects a wallpaper blob that has not been read yet. */
+        wallpaperPending: false,
         dim: 0.18,
         panel: 0.35,
         veil: 0.55,
@@ -510,13 +648,13 @@ window.__ModuleLoader__.load({
           typeof parsed.skin === 'string' && SKINS.some((entry) => entry.id === parsed.skin)
             ? parsed.skin
             : 'default';
+        const stored = parsed.wallpaper !== null && typeof parsed.wallpaper === 'object' ? parsed.wallpaper : null;
+        // Inline data URLs come from the pre-IndexedDB release and are migrated on boot.
         const wallpaper =
-          parsed.wallpaper !== null &&
-          typeof parsed.wallpaper === 'object' &&
-          typeof parsed.wallpaper.value === 'string' &&
-          isImageSource(parsed.wallpaper.value)
-            ? { kind: parsed.wallpaper.kind === 'url' ? 'url' : 'data', value: parsed.wallpaper.value }
+          stored !== null && typeof stored.value === 'string' && isImageSource(stored.value)
+            ? { kind: stored.kind === 'url' ? 'url' : 'data', value: stored.value }
             : null;
+        const wallpaperPending = wallpaper === null && stored !== null && stored.kind === 'blob';
         const legacy = parsed.panel === undefined;
         const storedDim = parsed.dim === undefined ? 0.18 : clamp(parsed.dim, 0, 0.85);
         // The old `text` field chose a text colour; its glass shade is the opposite one.
@@ -534,6 +672,7 @@ window.__ModuleLoader__.load({
         return {
           skin,
           wallpaper,
+          wallpaperPending,
           // A wallpaper saved before the panel slider existed was veiled by the old
           // defaults; start it lighter so the image reads, and let the slider raise it.
           dim: legacy ? Math.min(storedDim, 0.18) : storedDim,
@@ -551,23 +690,36 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * localStorage keeps only small values: a stored wallpaper is recorded by kind,
+     * because the pixels themselves live in IndexedDB as a Blob.
+     */
+    function serializeState(state) {
+      const wallpaper = state.wallpaper;
+      return {
+        skin: state.skin,
+        wallpaper:
+          wallpaper === null
+            ? null
+            : wallpaper.kind === 'url'
+              ? { kind: 'url', value: wallpaper.value }
+              : wallpaper.kind === 'data'
+                ? { kind: 'data', value: wallpaper.value }
+                : { kind: 'blob' },
+        dim: state.dim,
+        panel: state.panel,
+        veil: state.veil,
+        shade: state.shade,
+        textTheme: state.textTheme,
+        textPrimary: state.textPrimary,
+        textMuted: state.textMuted,
+        luminance: state.luminance,
+      };
+    }
+
     function saveState(state) {
       try {
-        window.localStorage.setItem(
-          STORE_KEY,
-          JSON.stringify({
-            skin: state.skin,
-            wallpaper: state.wallpaper,
-            dim: state.dim,
-            panel: state.panel,
-            veil: state.veil,
-            shade: state.shade,
-            textTheme: state.textTheme,
-            textPrimary: state.textPrimary,
-            textMuted: state.textMuted,
-            luminance: state.luminance,
-          }),
-        );
+        window.localStorage.setItem(STORE_KEY, JSON.stringify(serializeState(state)));
         return true;
       } catch (error) {
         return false;
@@ -903,6 +1055,74 @@ window.__ModuleLoader__.load({
         return true;
       };
 
+      /** One live object URL for the stored wallpaper; older ones are revoked. */
+      let wallpaperUrl = null;
+
+      const releaseWallpaperUrl = () => {
+        if (wallpaperUrl !== null) {
+          URL.revokeObjectURL(wallpaperUrl);
+          wallpaperUrl = null;
+        }
+      };
+
+      /** Show a stored Blob, then measure it so the glass direction fits the new image. */
+      const applyWallpaperBlob = (blob) => {
+        releaseWallpaperUrl();
+        wallpaperUrl = URL.createObjectURL(blob);
+        const url = wallpaperUrl;
+        // A different image invalidates the previous brightness reading.
+        const next = {
+          ...store.get(),
+          wallpaper: { kind: 'blob', value: url },
+          wallpaperPending: false,
+          luminance: null,
+        };
+        store.set(next);
+        applyAll(next);
+        saveState(next);
+        void measureLuminance(url).then((luminance) => {
+          if (luminance === null) return;
+          const current = store.get();
+          if (current.wallpaper === null || current.wallpaper.value !== url) return;
+          commit({ luminance }, { deferPersist: true });
+        });
+      };
+
+      /**
+       * Wallpaper pixels live in IndexedDB, so they arrive after the first paint. Read
+       * them once, or migrate a legacy inline data URL out of localStorage first.
+       */
+      const hydrateWallpaper = async () => {
+        const initial = store.get();
+        if (initial.wallpaper !== null && initial.wallpaper.kind !== 'data' && !initial.wallpaperPending) return;
+        try {
+          if (initial.wallpaper !== null && initial.wallpaper.kind === 'data') {
+            const response = await fetch(initial.wallpaper.value);
+            const blob = await response.blob();
+            if (blob.size > 0) {
+              await writeWallpaperBlob(blob);
+              applyWallpaperBlob(blob);
+              return;
+            }
+            store.set({ ...store.get(), wallpaper: null, message: null });
+            saveState(store.get());
+            return;
+          }
+          if (!initial.wallpaperPending) return;
+          const blob = await readWallpaperBlob();
+          if (blob instanceof Blob && blob.size > 0) {
+            applyWallpaperBlob(blob);
+            return;
+          }
+          // The flag promised pixels that are gone; drop it so the UI stops waiting.
+          const cleared = { ...store.get(), wallpaper: null, wallpaperPending: false };
+          store.set(cleared);
+          saveState(cleared);
+        } catch (error) {
+          store.set({ ...store.get(), message: 'storageUnavailable' });
+        }
+      };
+
       // Our own layer rebuilds also emit theme/change, so only an actual light/dark
       // switch may rebuild the layer; every emission still repaints the stylesheet.
       let lastScheme = scheme();
@@ -941,9 +1161,11 @@ window.__ModuleLoader__.load({
         styleElement = element;
         applyAll(store.get());
         backfillLuminance();
+        void hydrateWallpaper();
         return () => {
           element.remove();
           styleElement = null;
+          releaseWallpaperUrl();
           if (persistTimer !== null) {
             clearTimeout(persistTimer);
             persistTimer = null;
@@ -1032,29 +1254,19 @@ window.__ModuleLoader__.load({
           if (file === null) return;
           setBusy(true);
           try {
-            let dataUrl = await shrinkImage(file);
-            if (dataUrl.length > MAX_IMAGE_CHARS) dataUrl = await shrinkImage(file, 1280, 0.72);
-            if (dataUrl.length > MAX_IMAGE_CHARS) {
-              commit({ message: 'storageFull' });
-              return;
-            }
-            const luminance = await measureLuminance(dataUrl);
-            if (commit({ wallpaper: { kind: 'data', value: dataUrl }, luminance, message: null })) {
-              setUrl('');
-              return;
-            }
-            // The browser refused the first write; retry the whole image at a smaller encode.
-            const compact = await shrinkImage(file, 1100, 0.65);
-            const compactLuminance = compact.length > MAX_IMAGE_CHARS ? null : await measureLuminance(compact);
-            if (
-              compact.length > MAX_IMAGE_CHARS ||
-              !commit({ wallpaper: { kind: 'data', value: compact }, luminance: compactLuminance, message: null })
-            ) {
-              commit({ message: 'storageFull' });
-            }
+            const prepared = await prepareWallpaper(file);
+            await writeWallpaperBlob(prepared.blob);
+            releaseWallpaperUrl();
+            applyWallpaperBlob(prepared.blob);
+            setUrl('');
           } catch (error) {
-            const reason =
-              error !== null && error !== undefined && error.message === 'decodeFailed' ? 'decodeFailed' : 'readFailed';
+            const code = error !== null && error !== undefined ? String(error.message ?? '') : '';
+            const quota = error !== null && error !== undefined && error.name === 'QuotaExceededError';
+            let reason = 'readFailed';
+            if (quota || code === 'storageFull') reason = 'storageFull';
+            else if (code === 'tooLarge') reason = 'tooLarge';
+            else if (code === 'decodeFailed') reason = 'decodeFailed';
+            else if (code === 'storageUnavailable') reason = 'storageUnavailable';
             commit({ message: reason });
           } finally {
             setBusy(false);
@@ -1074,9 +1286,13 @@ window.__ModuleLoader__.load({
             commit({ message: 'invalidUrl' });
             return;
           }
+          // A remote URL replaces any stored blob, so release both the object URL and
+          // the IndexedDB record before committing the new source.
+          releaseWallpaperUrl();
+          void deleteWallpaperBlob().catch(() => {});
           // Remote images without CORS cannot be measured; the auto mode then follows
           // the appearance scheme until a measurable image arrives.
-          if (commit({ wallpaper: { kind: 'url', value }, luminance: null, message: null })) {
+          if (commit({ wallpaper: { kind: 'url', value }, wallpaperPending: false, luminance: null, message: null })) {
             setUrl('');
             void measureLuminance(value).then((luminance) => {
               const current = store.get();
@@ -1187,7 +1403,11 @@ window.__ModuleLoader__.load({
                         key: 'remove',
                         type: 'button',
                         className: 'dsh-skins__btn',
-                        onClick: () => commit({ wallpaper: null, message: null }),
+                        onClick: () => {
+                          releaseWallpaperUrl();
+                          void deleteWallpaperBlob().catch(() => {});
+                          commit({ wallpaper: null, wallpaperPending: false, luminance: null, message: null });
+                        },
                       },
                       t('remove'),
                     )
