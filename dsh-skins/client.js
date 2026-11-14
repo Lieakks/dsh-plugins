@@ -144,8 +144,10 @@ window.__ModuleLoader__.load({
 
     /** Surface alpha factors used while a wallpaper is set; the panel slider scales them. */
     const SURFACE_FACTORS = { layer1: 0.9, layer2: 0.8, overlay: 0.5, sidebar: 1 };
-    /** Floors keep dense text areas readable even at maximum transparency. */
-    const SURFACE_FLOORS = { layer1: 0.36, layer2: 0.42, overlay: 0.65, sidebar: 0.36 };
+    /** Floors keep dense text areas readable at maximum transparency. */
+    const SURFACE_FLOORS = { layer1: 0.28, layer2: 0.32, overlay: 0.55, sidebar: 0.28 };
+    /** Upper bound of the panel-transparency setting. */
+    const MAX_PANEL = 0.95;
 
     /**
      * Text palettes layered on the glass. `contrast` pushes muted copy close to the
@@ -376,7 +378,7 @@ window.__ModuleLoader__.load({
 
       const glass = GLASS[direction] ?? GLASS.darkText;
       const text = textColors === undefined || textColors === null ? { primary: glass.text, muted: glass.muted } : textColors;
-      const transparency = clamp(panel, 0, 0.85);
+      const transparency = clamp(panel, 0, MAX_PANEL);
       const tokens = {
         [TOKEN.base]: { light: 'transparent', dark: 'transparent' },
         // Both scheme slots carry the same value: the text answers to the wallpaper.
@@ -676,7 +678,7 @@ window.__ModuleLoader__.load({
           // A wallpaper saved before the panel slider existed was veiled by the old
           // defaults; start it lighter so the image reads, and let the slider raise it.
           dim: legacy ? Math.min(storedDim, 0.18) : storedDim,
-          panel: legacy ? 0.35 : clamp(parsed.panel, 0, 0.85),
+          panel: legacy ? 0.35 : clamp(parsed.panel, 0, MAX_PANEL),
           veil: parsed.veil === undefined ? 0.55 : clamp(parsed.veil, 0, 0.9),
           shade,
           textTheme,
@@ -869,11 +871,20 @@ window.__ModuleLoader__.load({
        */
       const BACKDROP_ATTR = 'data-dsh-skins-backdrop';
       let scanTimer = null;
+      let lastScanAt = 0;
+      /**
+       * Markers are sticky: once a layer is frosted it keeps the frost until it leaves
+       * the document. A modal reveals itself with an opacity/scale animation, so a
+       * fresh match each scan would add and drop the blur frame by frame — the
+       * "shimmering between see-through and blurred" this replaced.
+       */
+      const markedBackdrops = new Set();
 
       const stripBackdrops = () => {
         for (const element of document.querySelectorAll(`[${BACKDROP_ATTR}]`)) {
           element.removeAttribute(BACKDROP_ATTR);
         }
+        markedBackdrops.clear();
       };
 
       /** Alpha of a computed CSS colour; `1` when it cannot be parsed. */
@@ -910,35 +921,56 @@ window.__ModuleLoader__.load({
         }
       };
 
-      /** Frost every open backdrop layer; clear markers that no longer match. */
+      /**
+       * Frost at most the largest backdrop of each portal: two stacked frosting layers
+       * would double the veil, and a second layer arriving a frame later reads as a jump.
+       */
       const scanBackdrops = () => {
         if (styleElement === null) return;
         if (store.get().wallpaper === null) {
           stripBackdrops();
           return;
         }
-        const marked = new Set();
+        for (const element of [...markedBackdrops]) {
+          if (element.isConnected) continue;
+          element.removeAttribute(BACKDROP_ATTR);
+          markedBackdrops.delete(element);
+        }
         for (const root of document.body.children) {
           if (root.id === 'root' || root === styleElement) continue;
           const nodes = [root];
           collectCandidates(root, 1, nodes);
+          let best = null;
+          let bestArea = 0;
           for (const element of nodes) {
             if (!looksLikeBackdrop(element)) continue;
-            element.setAttribute(BACKDROP_ATTR, '');
-            marked.add(element);
+            const rect = element.getBoundingClientRect();
+            const area = rect.width * rect.height;
+            if (area <= bestArea) continue;
+            bestArea = area;
+            best = element;
           }
-        }
-        for (const element of document.querySelectorAll(`[${BACKDROP_ATTR}]`)) {
-          if (!marked.has(element)) element.removeAttribute(BACKDROP_ATTR);
+          if (best === null) continue;
+          if (!best.hasAttribute(BACKDROP_ATTR)) best.setAttribute(BACKDROP_ATTR, '');
+          markedBackdrops.add(best);
         }
       };
 
+      /**
+       * Scans are throttled, but the first one after an idle period runs immediately so
+       * a modal that just opened is frosted on its first frame instead of 180ms later.
+       */
       const scheduleScan = () => {
         if (scanTimer !== null) return;
-        scanTimer = setTimeout(() => {
-          scanTimer = null;
-          scanBackdrops();
-        }, 180);
+        const idle = performance.now() - lastScanAt > 500;
+        scanTimer = setTimeout(
+          () => {
+            scanTimer = null;
+            lastScanAt = performance.now();
+            scanBackdrops();
+          },
+          idle ? 0 : 150,
+        );
       };
 
       /**
@@ -982,6 +1014,7 @@ window.__ModuleLoader__.load({
           [${BACKDROP_ATTR}] {
             background-color: ${frost} !important;
             backdrop-filter: blur(22px) saturate(1.06);
+            transition: background-color 200ms ease, backdrop-filter 200ms ease;
           }
           [${BACKDROP_ATTR}], [${BACKDROP_ATTR}] * { text-shadow: none; }
         `;
@@ -1188,8 +1221,9 @@ window.__ModuleLoader__.load({
 
       /**
        * Backdrop layers open and close as portals appended beside `#root`, so the
-       * scan follows document mutations rather than only mount time. The debounce
-       * keeps a busy page at one scan per gesture.
+       * scan follows document mutations rather than only mount time. Scans are
+       * throttled (first one after idle runs at once), and markings are sticky, so a
+       * modal's reveal animation cannot add and drop the frost frame by frame.
        */
       ctx.effect(() => {
         if (typeof MutationObserver !== 'function') return undefined;
@@ -1453,13 +1487,13 @@ window.__ModuleLoader__.load({
                           type: 'range',
                           className: 'dsh-skins__range',
                           min: 0,
-                          max: 85,
+                          max: 95,
                           step: 1,
                           value: Math.round(state.panel * 100),
                           'aria-label': t('panel'),
                           onChange: (event) =>
                             commit(
-                              { panel: clamp(Number(event.target.value) / 100, 0, 0.85) },
+                              { panel: clamp(Number(event.target.value) / 100, 0, MAX_PANEL) },
                               { deferPersist: true, layer: false, rebuildLayer: true },
                             ),
                         }),
