@@ -10,14 +10,14 @@
 
 ## 安装与更新
 
-三个包都以 `link:` 方式装在 profile 里（`C:\Users\Administrator\.dsh\profiles\desktop\package.json`），因此**改完源码必须重装一次**，浏览器才会加载新的 client bundle：
+三个包都以 `link:` 方式装在当前 profile 里（`$DSH_PROFILE_DIR/package.json`），因此**改完源码必须重装一次**，浏览器才会加载新的 client bundle：
 
 ```
 plugin_manager remove_bundle  target=@local/dsh-account-balance
-plugin_manager install_bundle target=G:\DSH_WorkSpace\dsh-account-balance
+plugin_manager install_bundle target=<本仓库检出目录>/dsh-account-balance
 ```
 
-（其余两个同理，target 换成 `G:\DSH_WorkSpace\dsh-skins` / `G:\DSH_WorkSpace\dsh-quota-meter`。）
+（其余两个同理，target 换成 `<本仓库检出目录>/dsh-skins` / `<本仓库检出目录>/dsh-quota-meter`。）
 
 - 只改 Host 半（`index.js`）时无需重装，Loader HMR 会接管。
 - 只改 `client.js` 时必须重装：client bundle 是快照，HMR 只在 bundle 元数据变化时才替换。
@@ -60,4 +60,4 @@ plugin_manager install_bundle target=G:\DSH_WorkSpace\dsh-account-balance
 
 ## 历史位置
 
-`dsh-quota-meter` 原先位于 `C:\Users\Administrator\Documents\deepseek-harness\default-workspace\plugins\dsh-quota-meter`，现已复制进本仓库、profile 的 `link:` 指向 `G:\DSH_WorkSpace\dsh-quota-meter`，原目录已删除。
+`dsh-quota-meter` 原先放在另一个工作区的插件目录里，现已复制进本仓库、profile 的 `link:` 指向仓库内的 `dsh-quota-meter`，原目录已删除。
