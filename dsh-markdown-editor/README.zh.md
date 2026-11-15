@@ -2,7 +2,7 @@
 description: "在右侧边栏的 Markdown 预览里直接编辑：所见即所得（Vditor IR）、分栏实时预览、源码与预览四种模式，保存回同一个工作区文件。"
 ---
 
-# @local/dsh-markdown-editor
+# @lieakks/dsh-markdown-editor
 
 [English](README.md) | 中文
 

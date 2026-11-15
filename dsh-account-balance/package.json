@@ -1,8 +1,27 @@
 {
-  "name": "@local/dsh-account-balance",
+  "name": "@lieakks/dsh-account-balance",
   "version": "1.0.0",
-  "private": true,
+  "license": "MIT",
   "description": "Shows the signed-in DeepSeek account balance in the sidebar footer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lieakks/dsh-plugins.git",
+    "directory": "dsh-account-balance"
+  },
+  "homepage": "https://github.com/Lieakks/dsh-plugins/tree/main/dsh-account-balance",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "balance",
+    "account"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
   "type": "module",
   "exports": {
     ".": "./index.js",

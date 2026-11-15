@@ -1,6 +1,6 @@
 # DSH 插件集
 
-给 DeepSeek Harness 的 Web 界面补四个小功能：**侧边栏账号余额**、**整站皮肤（可换背景图）**、**会话额度消耗**、**侧边栏 Markdown 编辑器**。
+给 DeepSeek Harness 的 Web 界面补五个小功能：**侧边栏账号余额**、**整站皮肤（可换背景图）**、**会话额度消耗**、**侧边栏 Markdown 编辑器**、**输入框润色**。
 
 ![整窗效果](docs/screenshots/overview.jpg)
 
@@ -14,8 +14,9 @@
 | [`皮肤`](dsh-skins) | 多套配色、自定义背景图、文字对比度 | 设置 → 皮肤 |
 | [`额度消耗`](dsh-quota-meter) | 本会话已花多少额度 | 输入框下方 |
 | [`Markdown 编辑器`](dsh-markdown-editor) | 在文件预览里直接改 Markdown：所见即所得 / 分栏 / 源码 / 预览 | 右侧边栏文件预览 |
+| [`输入润色`](dsh-plugin-input-polish) | 点一下用专用的润色模型把草稿改写得具体可执行，模型与提示词都能改 | 输入框工具行左侧 |
 
-四个插件互相独立，可以只装其中一个。各插件的当前版本与变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+五个插件互相独立，可以只装其中一个（润色与额度消耗会互相配合，见「额度消耗」一节）。各插件的当前版本与变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 使用
 
@@ -47,7 +48,12 @@
 
 统计方式：账号余额是各会话共用的，所以按"**这段时间里谁在跑**"来分摊——两次读数之间余额下降多少，就记在期间运行过的会话上；充值、退款导致的余额上升不计入消耗，也不会清零已有数字。多个会话同时运行时按会话均分，是估算而不是账单。
 
-**与润色插件的配合**：如果装了 `@local/input-polish`（输入框左侧的润色按钮），它调用模型时会在页面内广播 `dsh:spend-source` 事件，额度插件据此把这段消耗记到**发起润色的那个会话**上，其它会话不受影响。额度插件只在宿主插件清单确认该插件存在时才注册这个监听；清单读不到时按"存在"处理，避免静默失效。页面开着时启用润色插件，需要刷新一次页面才会开始统计。
+- **子智能体**：它本身是一个独立会话，但消耗一律归到**派发它的会话**，不会为看不见的子会话立账。
+- **迟到结算**：余额在运行结束之后才扣款时，5 分钟内到达的这笔会补记给最近运行过的会话。
+- **长时间未观测**：超过 5 分钟没有读数（比如页面关着），期间的变化不猜归属，直接以当前余额作为新基准。
+- **未归属**：确实无法归属的下降（陌生会话在跑、润色没发出结束信号等）不丢，累计到「未能归属到会话」里，只在悬停提示中显示，用来和账号实际变化对账。
+
+**与润色插件的配合**：如果装了 `@lieakks/dsh-plugin-input-polish`（输入框左侧的润色按钮），它调用模型时会在页面内广播 `dsh:spend-source` 事件，额度插件据此把这段消耗记到**发起润色的那个会话**上，其它会话不受影响。额度插件只在宿主插件清单确认该插件存在时才注册这个监听；清单读不到时按"存在"处理，避免静默失效。页面开着时启用润色插件，需要刷新一次页面才会开始统计。
 
 ### Markdown 编辑器
 
@@ -61,35 +67,59 @@ Ctrl/Cmd+S 或「保存」写回同一个文件；磁盘文件被改动时按钮
 
 编辑器运行时（Vditor，MIT 协议）随插件放在 `vendor/` 目录、由插件本地提供，**不访问 CDN**。
 
+### 输入润色
+
+输入框工具行左侧（附件、权限、计划控件之后）多一个「润色」按钮。
+
+- 点击后由一个**专用的润色模型**结合本会话最近的对话，把草稿改写得更具体、更可执行；结果写回同一个输入框，发送前自己再检查一遍
+- 润色模型、思考档位、系统提示词都在 设置 → 通用 → **输入润色模型** 里改；默认 `deepseek-flash` 配 `low`，**不占用也不拖慢你的主对话模型**。提示词预填内置版本，留空或点「恢复默认」就还原
+- 任务跑在 Host 侧：切到别的会话、离开对话界面都不会中断，回到该会话时自动把结果写回草稿（前提是这期间草稿没被改动过）
+- 转圈时再点一下按钮 = 取消
+
 ## 安装
 
 前提：已安装 DeepSeek Harness，并能使用插件管理器（`plugin_manager`）。
+
+### 方式一：按包名安装（推荐）
+
+```
+plugin_manager install_bundle target=@lieakks/dsh-account-balance
+plugin_manager install_bundle target=@lieakks/dsh-skins
+plugin_manager install_bundle target=@lieakks/dsh-quota-meter
+plugin_manager install_bundle target=@lieakks/dsh-markdown-editor
+plugin_manager install_bundle target=@lieakks/dsh-plugin-input-polish
+```
+
+### 方式二：克隆仓库后按本地目录安装
 
 ```
 plugin_manager install_bundle target=<本仓库路径>/dsh-account-balance
 plugin_manager install_bundle target=<本仓库路径>/dsh-skins
 plugin_manager install_bundle target=<本仓库路径>/dsh-quota-meter
 plugin_manager install_bundle target=<本仓库路径>/dsh-markdown-editor
+plugin_manager install_bundle target=<本仓库路径>/dsh-plugin-input-polish
 ```
 
-装完刷新页面即可看到效果；插件的开关也在 设置 → 插件 里。
+两种方式装的是同一份代码：方式一取 npm 上的发布包，方式二用 `link:` 指向你的克隆目录（改代码立刻生效，适合自己改插件）。装完刷新页面即可看到效果；插件的开关在 设置 → 插件 里。
 
 ## 修改后重新安装
 
 改代码后必须重装一次，浏览器才会加载新的客户端包：
 
 ```
-plugin_manager remove_bundle  target=@local/dsh-account-balance
+plugin_manager remove_bundle  target=@lieakks/dsh-account-balance
 plugin_manager install_bundle target=<本仓库路径>/dsh-account-balance
 ```
 
 （只改 `index.js` 这类 Host 端代码时无需重装。）
 
+如果装的是 npm 发布包，不走上面这两条命令，直接在 设置 → 插件 里卸载重装即可。
+
 Markdown 编辑器多一个构建步骤：它改的是 `dsh-markdown-editor/src/client.js`，需要先编译出 `client.js` 再重装：
 
 ```
 cd dsh-markdown-editor/build
-npm install
+npm install      # 首次需要
 node build.mjs
 ```
 
@@ -97,13 +127,15 @@ node build.mjs
 
 插件版本以各自目录里的 `package.json` 的 `version` 为准，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-- 单个插件发布：`git tag -a <插件目录名>-v<版本> -m "<说明>"`，例如 `markdown-editor-v1.1.0`
+- 单个插件发布：`git tag -a <短名>-v<版本> -m "<说明>"`，例如 `markdown-editor-v1.1.0`（短名即去掉 `dsh-` 前缀的目录名）
 - 整套快照：`git tag -a v<版本> -m "<说明>"`（历史标签 `v0.1.0` – `v0.6.0` 即此含义）
 - 发版前先把该插件的 `version` 升上去、在 CHANGELOG 补一节；只改代码不升版本，不算一次发布
+- 上 npm：`npm publish`，版本号必须递增（发过的版本不能重发）；五个包都在 `@lieakks/` 这个 scope 下
 
 ## 说明
 
 - 账号余额、皮肤、额度消耗只用浏览器本地存储（`localStorage` / IndexedDB），不上传图片、不联网保存数据；Markdown 编辑器只读写当前会话工作区里的文件，不联网。
+- 输入润色会把**当前草稿**和本会话**最近 12 条消息**（合计不超过 6000 字符）发给设置里选定的模型服务；这次请求不写入会话日志，也不进对话历史。不想发就把该插件关掉。
 - Markdown 编辑器内置的 Vditor 为 MIT 协议，版权与第三方库清单见该插件目录下的 `THIRD-PARTY-NOTICES.md`。
 - 余额通过 Harness 自带的账号接口读取，浏览器侧拿不到登录凭据。
 - 皮肤、壁纸、文字配色按浏览器保存，换浏览器或清缓存会回到默认。
@@ -115,3 +147,6 @@ node build.mjs
 - 窄窗口（<768px）下设置面板铺满视口，不参与浮层雾化。
 - Markdown 编辑器只能编辑当前会话工作目录里已存在的 Markdown 文件（不新建、单文件上限 2 MiB），且只对运行中的会话可保存。
 - 所见即所得模式保存时按编辑器自己的序列化写回，列表符号、表格对齐等可能被规范化；需要逐字节保真时请切到「源码」。
+- 输入润色：草稿含 `@` 引用时按钮不可用（替换整段会丢掉引用），草稿上限 4000 字符；润色期间草稿被改动或已发送时，结果会被丢弃而不是覆盖。
+- 输入润色：模型 id 来自账号侧动态下发的目录，换 provider 或该模型下线后会提示「润色模型不可用」，需要到 设置 → 通用 重新选一个。
+- 输入润色：每次点击都是一次额外的模型请求（默认低思考档位），消耗计入发起它的会话。

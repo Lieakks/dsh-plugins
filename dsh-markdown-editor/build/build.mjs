@@ -25,7 +25,7 @@ await build({
   loader: { '.css': 'text' },
   define: { 'process.env.NODE_ENV': '"production"' },
   banner: {
-    js: '/* @local/dsh-markdown-editor — bundles Vditor 4.0.1 (MIT); see THIRD-PARTY-NOTICES.md */',
+    js: '/* @lieakks/dsh-markdown-editor — bundles Vditor 4.0.1 (MIT); see THIRD-PARTY-NOTICES.md */',
   },
   logLevel: 'info',
 })

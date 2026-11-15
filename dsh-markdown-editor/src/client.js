@@ -20,13 +20,13 @@ import Vditor from 'vditor'
 import vditorCss from 'vditor/dist/index.css'
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-markdown-editor',
+  id: '@lieakks/dsh-markdown-editor',
   factory(require) {
     const React = require('react')
     const h = React.createElement
 
     const NS = 'markdown-inline-editor'
-    const BODY_ID = '@local/dsh-markdown-editor/markdown'
+    const BODY_ID = '@lieakks/dsh-markdown-editor/markdown'
     const READ_ROUTE = 'markdown-inline-editor/read'
     const SAVE_ROUTE = 'markdown-inline-editor/save'
     const READ_TIMEOUT_MS = 20000

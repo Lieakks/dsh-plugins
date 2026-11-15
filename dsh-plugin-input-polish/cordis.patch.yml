@@ -1,0 +1,3 @@
+- insert:
+    - id: input-polish
+      name: '@lieakks/dsh-plugin-input-polish'

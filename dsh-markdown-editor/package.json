@@ -1,8 +1,28 @@
 {
-  "name": "@local/dsh-markdown-editor",
+  "name": "@lieakks/dsh-markdown-editor",
   "version": "1.1.0",
-  "private": true,
+  "license": "MIT",
   "description": "Inline Markdown editor for the right Sidebar's document preview, with a Typora-style instant-render mode",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lieakks/dsh-plugins.git",
+    "directory": "dsh-markdown-editor"
+  },
+  "homepage": "https://github.com/Lieakks/dsh-plugins/tree/main/dsh-markdown-editor",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "markdown",
+    "editor",
+    "vditor"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
   "type": "module",
   "exports": {
     ".": "./index.js",

@@ -1,8 +1,28 @@
 {
-  "name": "@local/dsh-skins",
+  "name": "@lieakks/dsh-skins",
   "version": "1.0.0",
-  "private": true,
+  "license": "MIT",
   "description": "Skin palettes and a custom background image for the Harness Web UI",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lieakks/dsh-plugins.git",
+    "directory": "dsh-skins"
+  },
+  "homepage": "https://github.com/Lieakks/dsh-plugins/tree/main/dsh-skins",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "theme",
+    "skin",
+    "wallpaper"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
   "type": "module",
   "exports": {
     ".": "./index.js",

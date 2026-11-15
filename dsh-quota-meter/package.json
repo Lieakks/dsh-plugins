@@ -1,8 +1,27 @@
 {
-  "name": "@local/dsh-quota-meter",
+  "name": "@lieakks/dsh-quota-meter",
   "version": "1.0.0",
-  "private": true,
+  "license": "MIT",
   "description": "Per-session credit consumption below the composer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lieakks/dsh-plugins.git",
+    "directory": "dsh-quota-meter"
+  },
+  "homepage": "https://github.com/Lieakks/dsh-plugins/tree/main/dsh-quota-meter",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "usage",
+    "credits"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
   "type": "module",
   "exports": {
     ".": "./index.js",
@@ -10,13 +29,23 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-api-remotes"]
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes"
+      ]
     }
   }
 }

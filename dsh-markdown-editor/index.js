@@ -1,7 +1,7 @@
 /**
  * Host half of the inline Markdown editor.
  *
- * The browser half (`@local/dsh-markdown-editor/client`) renders the editor in
+ * The browser half (`@lieakks/dsh-markdown-editor/client`) renders the editor in
  * the right Sidebar's document preview. The workspace file Remote
  * (`workspaceFiles`) deliberately exposes no mutation operation, so the write
  * channel lives here as two authenticated web routes:

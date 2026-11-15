@@ -1,0 +1,52 @@
+{
+  "name": "@lieakks/dsh-plugin-input-polish",
+  "version": "1.0.0",
+  "license": "MIT",
+  "description": "Adds a composer button that rewrites the current draft with the model, using the session as context.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lieakks/dsh-plugins.git",
+    "directory": "dsh-plugin-input-polish"
+  },
+  "homepage": "https://github.com/Lieakks/dsh-plugins/tree/main/dsh-plugin-input-polish",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "prompt",
+    "composer"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "README.md",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

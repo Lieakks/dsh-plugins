@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Input polish",
+    "description": "Adds a polish button to the chat composer and a model preference in Settings. Clicking the button asks a dedicated polish model to rewrite the current draft into a more specific message, using the session's recent conversation as context, then puts the rewritten text back into the composer for review before sending. The rewrite runs on the Host, so switching sessions or leaving the conversation does not stop it: the finished draft is applied when you come back. The polish model is chosen in Settings > General > Input polish model and defaults to deepseek-flash at low reasoning effort, so polishing never uses your main conversation model. The same row can open and edit the system instructions sent to the model, and restore the built-in prompt. Each click makes one extra model request that is not written to the session log."
+  }
+}
