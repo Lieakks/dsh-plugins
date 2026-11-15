@@ -1,6 +1,6 @@
 {
   "name": "@lieakks/dsh-markdown-editor",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "license": "MIT",
   "description": "Inline Markdown editor for the right Sidebar's document preview, with a Typora-style instant-render mode",
   "repository": {
@@ -37,7 +37,7 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "README.zh.md",
+    "docs/README.zh.md",
     "THIRD-PARTY-NOTICES.md",
     "src",
     "vendor"

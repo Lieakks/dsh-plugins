@@ -1,10 +1,8 @@
----
-description: "Edit Markdown inside the right Sidebar preview: a Typora-style instant-render mode (Vditor IR), a split live preview, source, and preview — all saved back to the same workspace file."
----
-
 # @lieakks/dsh-markdown-editor
 
-English | [中文](README.zh.md)
+*Edit Markdown inside the right Sidebar preview: a Typora-style instant-render mode (Vditor IR), a split live preview, source, and preview — all saved back to the same workspace file.*
+
+English | [中文](docs/README.zh.md)
 
 ## Summary
 

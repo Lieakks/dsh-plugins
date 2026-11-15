@@ -24,6 +24,12 @@
 
 ## dsh-markdown-editor（侧边栏 Markdown 编辑器）
 
+### 1.1.1 — 2026-11-15
+
+- 中文 README 移到 `docs/README.zh.md`：此前根目录同时有 `README.md` 与 `README.zh.md`，npm 发布时挑中了中文版，导致 npm 包页面显示中文。现在根目录只剩一个 README，npm 页面显示英文版，中文版保留在包内 `docs/` 下并被英文版链接
+- 两个 README 去掉开头的 YAML frontmatter（会在 npm 页面上渲染成表格），改为标题下的一行斜体简介
+- `files` 相应改为 `docs/README.zh.md`
+
 ### 1.1.0 — 2026-11-15
 
 首个入库版本。
