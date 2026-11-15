@@ -1,6 +1,6 @@
 {
   "name": "@lieakks/dsh-skins",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "description": "Skin palettes and a custom background image for the Harness Web UI",
   "repository": {
@@ -35,7 +35,8 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.md"
   ],
   "dsh": {
     "bundle": {

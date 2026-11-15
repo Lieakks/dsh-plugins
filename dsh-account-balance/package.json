@@ -1,6 +1,6 @@
 {
   "name": "@lieakks/dsh-account-balance",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "description": "Shows the signed-in DeepSeek account balance in the sidebar footer",
   "repository": {
@@ -34,7 +34,8 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.md"
   ],
   "dsh": {
     "bundle": {
