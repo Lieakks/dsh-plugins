@@ -1,0 +1,3 @@
+- insert:
+    - id: markdown-inline-editor
+      name: '@local/dsh-markdown-editor'

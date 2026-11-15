@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Inline Markdown editor",
+    "description": "Edit the Markdown file in the right Sidebar preview itself. A toolbar above the document offers WYSIWYG / Split / Source / Preview: WYSIWYG is the bundled Vditor IR mode (Typora-like — edit on the rendered document), Split shows source beside a live rendered copy, and the other two show one side only; the chosen mode is remembered. Ctrl/Cmd+S or Save writes the same file, a changed file turns Save into Overwrite, and a disk-side change offers Reload; a leading YAML frontmatter block is preserved unchanged. The Vditor runtime ships with the plugin and never touches a CDN. Limits: existing Markdown files inside the current Session's working directory only (no new files, symbolic links, or files above 2 MiB); saving from WYSIWYG mode may normalize list markers, table alignment, and similar Markdown formatting."
+  }
+}

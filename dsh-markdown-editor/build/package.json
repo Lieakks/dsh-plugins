@@ -1,0 +1,16 @@
+{
+  "name": "dsh-markdown-editor-build",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bundles src/client.js (with vendored Vditor) into ../client.js",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "vditor": "4.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

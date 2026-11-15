@@ -1,0 +1,41 @@
+{
+  "name": "@local/dsh-markdown-editor",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Inline Markdown editor for the right Sidebar's document preview, with a Typora-style instant-render mode",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "THIRD-PARTY-NOTICES.md",
+    "src",
+    "vendor"
+  ],
+  "scripts": {
+    "build": "node build/build.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview"
+      ]
+    }
+  }
+}
