@@ -5,12 +5,27 @@ window.__ModuleLoader__.load({
     const h = React.createElement
 
     const NS = 'quota-meter'
-    const STORE_KEY = 'dsh-quota-meter:sessions'
-    const LEGACY_KEY = 'dsh-quota-meter:baseline'
-    const MAX_BASELINES = 100
+    /** Accumulated spend per Session: sessionId → { spent, at }. */
+    const SPEND_KEY = 'dsh-quota-meter:spend:v2'
+    /** Pre-v2 baseline store, kept only so the old key can be cleared. */
+    const LEGACY_KEY = 'dsh-quota-meter:sessions'
+    const MAX_SESSIONS = 100
     const POLL_MS = 15000
     const SETTLE_MS = 2000
     const STALE_MS = 60000
+    /** Amounts below this are float noise, not real movement. */
+    const EPSILON = 0.000001
+    /**
+     * Same-page event a companion plugin uses to declare model spend it caused. The
+     * polish button is the one source today; the list is explicit so an unrelated
+     * dispatcher cannot charge a Session.
+     */
+    const SPEND_EVENT = 'dsh:spend-source'
+    const SPEND_SOURCES = new Set(['polish'])
+    /** Loader module names that back a spend source, used for the install check. */
+    const SPEND_SOURCE_MODULES = ['input-polish']
+    /** Longest a companion call may hold the books; the Host caps one at 120s. */
+    const SPEND_HOLD_MS = 150000
 
     const DICT = {
       en: {
@@ -22,7 +37,7 @@ window.__ModuleLoader__.load({
         refresh: 'Refresh balance',
         bonus: 'bonus',
         used: 'this session',
-        since: 'Counted from',
+        since: 'Counting since',
         updated: 'Updated',
       },
       zh: {
@@ -34,7 +49,7 @@ window.__ModuleLoader__.load({
         refresh: '刷新额度',
         bonus: '赠送',
         used: '本会话已用',
-        since: '统计起点',
+        since: '开始统计',
         updated: '更新于',
       },
     }
@@ -115,43 +130,45 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Read the durable session baselines: sessionId → { total, at }. They live in
-     * localStorage so reopening a Session, or reloading the page, keeps counting
-     * the same Session instead of starting over.
+     * Read the durable per-Session spend counters: sessionId → { spent, at }.
+     * They live in localStorage so reopening a Session, or reloading the page,
+     * keeps the same accumulated figure instead of starting over.
      */
-    function readBaselines() {
+    function readSpend() {
       try {
-        window.sessionStorage.removeItem(LEGACY_KEY)
+        // The pre-v2 shape measured a drop from a captured baseline, which a top-up
+        // wiped out; it cannot be converted, so it is dropped once.
+        window.localStorage.removeItem(LEGACY_KEY)
       } catch (error) {}
       try {
-        const raw = window.localStorage.getItem(STORE_KEY)
+        const raw = window.localStorage.getItem(SPEND_KEY)
         if (!raw) return {}
         const parsed = JSON.parse(raw)
         if (!parsed || typeof parsed !== 'object') return {}
-        const baselines = {}
+        const spend = {}
         for (const [id, entry] of Object.entries(parsed)) {
-          if (entry && typeof entry.total === 'number' && Number.isFinite(entry.total)) {
-            baselines[id] = {
-              total: entry.total,
+          if (entry && typeof entry.spent === 'number' && Number.isFinite(entry.spent) && entry.spent >= 0) {
+            spend[id] = {
+              spent: entry.spent,
               at: typeof entry.at === 'number' && Number.isFinite(entry.at) ? entry.at : 0,
             }
           }
         }
-        return baselines
+        return spend
       } catch (error) {
         return {}
       }
     }
 
-    /** Persist the baselines, keeping only the most recently captured ones. */
-    function writeBaselines(baselines) {
+    /** Persist the counters, keeping only the most recently touched Sessions. */
+    function writeSpend(spend) {
       try {
-        const ids = Object.keys(baselines)
-        if (ids.length > MAX_BASELINES) {
-          ids.sort((left, right) => baselines[left].at - baselines[right].at)
-          for (const id of ids.slice(0, ids.length - MAX_BASELINES)) delete baselines[id]
+        const ids = Object.keys(spend)
+        if (ids.length > MAX_SESSIONS) {
+          ids.sort((left, right) => spend[left].at - spend[right].at)
+          for (const id of ids.slice(0, ids.length - MAX_SESSIONS)) delete spend[id]
         }
-        window.localStorage.setItem(STORE_KEY, JSON.stringify(baselines))
+        window.localStorage.setItem(SPEND_KEY, JSON.stringify(spend))
       } catch (error) {}
     }
 
@@ -176,10 +193,10 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One shared balance view plus one baseline per Session. A Session's
-     * baseline is captured the first time its composer shows this widget, which
-     * for a new Session is before its first message; consumption is then the
-     * drop from that baseline to the latest reading.
+     * One shared balance view plus one spend counter per Session. A counter is opened
+     * the first time its composer shows this widget and then grows by the drop the
+     * account balance made while that Session was the one running — never by a
+     * difference from a stored snapshot, so a recharge leaves the counters alone.
      */
     function createStore(ctx) {
       let snapshot = {
@@ -193,11 +210,16 @@ window.__ModuleLoader__.load({
         stale: false,
         updatedAt: 0,
       }
-      const baselines = readBaselines()
-      const awaiting = new Set()
+      const spend = readSpend()
       const mounted = new Set()
       const listeners = new Set()
       const statuses = new Map()
+      /** Sessions that were running during the interval since the last reading. */
+      const intervalRunning = new Set()
+      /** Account total at the last reading; `null` until the first one lands. */
+      let lastTotal = null
+      /** Companion calls in flight per Session: sessionId → expiry timestamp. */
+      const polishUntil = new Map()
       let inFlight = null
       let poll = null
       let settle = null
@@ -216,26 +238,49 @@ window.__ModuleLoader__.load({
       })
 
       /**
-       * Give every Session first seen now its baseline, and move any baseline the
-       * current total has risen above — a top-up or refund — up to that total.
+       * Credit one reading to whichever Sessions were running while its drop happened.
+       *
+       * The account balance is shared, so the only per-Session signal is *when* it fell:
+       * the drop between two readings belongs to the Sessions that ran in that interval.
+       * A rise (top-up or refund) is not spend and never touches a counter — that is
+       * what used to reset every Session to zero after a recharge. With several runs
+       * in flight the drop is split evenly, which is an estimate, not a bill.
        */
-      const reconcile = (total) => {
-        let changed = false
+      const attribute = (total) => {
+        const previous = lastTotal
+        lastTotal = total
+        const now = Date.now()
+        const runningNow = new Set()
+        for (const [id, running] of statuses) if (running) runningNow.add(id)
+        // A companion call in flight is attributed exactly like an Agent run. One that
+        // never says it ended stops counting at its deadline — and is dropped from the
+        // pending set too, so a lost "end" cannot keep charging later readings.
+        for (const [id, expiresAt] of [...polishUntil]) {
+          if (expiresAt > now) {
+            runningNow.add(id)
+            continue
+          }
+          polishUntil.delete(id)
+          intervalRunning.delete(id)
+        }
+        const credited = new Set([...intervalRunning, ...runningNow])
+        intervalRunning.clear()
+        for (const id of runningNow) intervalRunning.add(id)
+        if (previous === null || credited.size === 0) return
+        const delta = previous - total
+        // A recharge, a refund or an unchanged reading: nothing to charge.
+        if (delta <= EPSILON) return
         const at = Date.now()
-        for (const id of awaiting) {
-          awaiting.delete(id)
-          if (baselines[id] === undefined) {
-            baselines[id] = { total, at }
-            changed = true
-          }
+        const share = delta / credited.size
+        for (const id of credited) {
+          const entry = spend[id] ?? { spent: 0, at }
+          entry.spent += share
+          spend[id] = entry
         }
-        for (const [id, entry] of Object.entries(baselines)) {
-          if (total > entry.total + 0.000001) {
-            baselines[id] = { total, at }
-            changed = true
-          }
-        }
-        if (changed) writeBaselines(baselines)
+        writeSpend(spend)
+        // Mounted widgets read the counter from the shared snapshot, so a change here
+        // has to reach them through the usual notification.
+        publish({})
       }
 
       /** Read the wallet balances once; concurrent callers share one request. */
@@ -266,7 +311,7 @@ window.__ModuleLoader__.load({
               keepStale()
               return
             }
-            reconcile(info.total)
+            attribute(info.total)
             publish({
               state: 'ready',
               currency: info.currency,
@@ -292,33 +337,32 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Claim a Session's counter when its composer mounts. A Session without a
-       * stored baseline triggers one fresh read so its baseline is the balance at
-       * that moment rather than an old reading.
+       * Claim a Session's counter when its composer mounts. Counters are created on
+       * demand: nothing is captured from the balance, so a later recharge cannot
+       * disturb them.
        */
       const track = (sessionId) => {
         const key = text(sessionId)
         if (!key || key === 'undefined' || key === 'null') return () => {}
         mounted.add(key)
-        if (baselines[key] === undefined && !awaiting.has(key)) {
-          awaiting.add(key)
-          void load()
+        if (spend[key] === undefined) {
+          spend[key] = { spent: 0, at: Date.now() }
+          writeSpend(spend)
         }
         return () => {
           mounted.delete(key)
         }
       }
 
-      /** Credit consumed by one Session since its baseline. */
+      /** Credit attributed to one Session. */
       const usedFor = (sessionId) => {
-        const entry = baselines[text(sessionId)]
-        if (entry === undefined || snapshot.state !== 'ready') return 0
-        return Math.max(0, entry.total - snapshot.total)
+        const entry = spend[text(sessionId)]
+        return entry === undefined ? 0 : entry.spent
       }
 
-      /** When that Session's baseline was captured. */
+      /** When that Session's counter was opened. */
       const sinceFor = (sessionId) => {
-        const entry = baselines[text(sessionId)]
+        const entry = spend[text(sessionId)]
         return entry === undefined ? 0 : entry.at
       }
 
@@ -329,27 +373,60 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Follow Session running state: billing settles when a request closes, so
-       * the widget reads shortly after the last run ends and polls only while
-       * at least one run is in flight.
+       * Follow Session running state. A run starting also opens the interval it will
+       * be charged for, and a run ending lets billing settle before the closing read;
+       * the widget otherwise polls while anything is in flight.
        */
       const noteStatus = (sessionId, running) => {
         const key = text(sessionId)
         const next = running === true
         if (statuses.get(key) === next) return
         statuses.set(key, next)
+        if (next) {
+          intervalRunning.add(key)
+        }
         const count = runningCount()
         publish({ running: count })
         if (settle !== null) {
           clearTimeout(settle)
           settle = null
         }
-        if (next === false && count === 0) {
-          settle = setTimeout(() => {
-            settle = null
-            void load()
-          }, SETTLE_MS)
+        if (next) {
+          // Read at the boundary so the run's drop is measured from its own start
+          // instead of from wherever the previous poll happened to land.
+          void load()
+          return
         }
+        if (count === 0) armSettle()
+      }
+
+      /** Read once billing has had time to settle. */
+      const armSettle = () => {
+        if (settle !== null) clearTimeout(settle)
+        settle = setTimeout(() => {
+          settle = null
+          void load()
+        }, SETTLE_MS)
+      }
+
+      /**
+       * Charge a companion plugin's model call to the Session it was started from.
+       * `start` opens the window and takes a boundary reading; `end` closes it and
+       * waits for settlement. The Session stays in `intervalRunning` either way, so
+       * the closing reading still holds the whole call — dropping it here would
+       * lose the last chunk.
+       */
+      const noteSpendSource = (sessionId, phase) => {
+        const key = text(sessionId)
+        if (!key || key === 'undefined' || key === 'null') return
+        intervalRunning.add(key)
+        if (phase === 'end') {
+          polishUntil.delete(key)
+          armSettle()
+          return
+        }
+        polishUntil.set(key, Date.now() + SPEND_HOLD_MS)
+        void load()
       }
 
       /**
@@ -364,18 +441,20 @@ window.__ModuleLoader__.load({
       }
 
       const reset = () => {
-        for (const id of Object.keys(baselines)) delete baselines[id]
-        awaiting.clear()
-        writeBaselines(baselines)
-        // A different account starts over: re-arm the Session on screen so the
-        // next reading captures its starting balance again.
-        for (const id of mounted) awaiting.add(id)
+        // A different account starts over: every counter belongs to the old one.
+        for (const id of Object.keys(spend)) delete spend[id]
+        intervalRunning.clear()
+        lastTotal = null
+        writeSpend(spend)
+        for (const id of mounted) spend[id] = { spent: 0, at: Date.now() }
+        if (mounted.size > 0) writeSpend(spend)
         publish({
           state: 'reading',
           currency: 'CNY',
           recharge: 0,
           bonus: 0,
           total: 0,
+          running: 0,
           pending: false,
           stale: false,
           updatedAt: 0,
@@ -404,6 +483,7 @@ window.__ModuleLoader__.load({
         usedFor,
         sinceFor,
         noteStatus,
+        noteSpendSource,
         start,
         reset,
         dispose,
@@ -533,6 +613,64 @@ window.__ModuleLoader__.load({
           () => listen('deepseek-account/session-expired', resetAccount),
           'quota-meter: session expired',
         )
+        /**
+         * Accept a companion plugin's spend announcements. Registration is conditional:
+         * when the Host inventory confirms no companion is installed, nothing here is
+         * attached at all. An unreadable inventory registers anyway — "unknown" must
+         * not silently disable the accounting.
+         */
+        const onSpendSource = (event) => {
+          const detail = event === null || typeof event !== 'object' ? null : event.detail
+          if (detail === null || typeof detail !== 'object') return
+          if (!SPEND_SOURCES.has(detail.source)) return
+          if (typeof detail.sessionId !== 'string' || detail.sessionId === '') return
+          store.noteSpendSource(detail.sessionId, detail.phase === 'end' ? 'end' : 'start')
+        }
+        ctx.effect(() => {
+          let listening = false
+          const attach = () => {
+            if (listening) return
+            listening = true
+            window.addEventListener(SPEND_EVENT, onSpendSource)
+          }
+          const detect = async () => {
+            const remote = ctx.get('remote')
+            const inventory = remote === undefined || remote === null ? undefined : remote.pluginInventory
+            if (inventory === undefined || inventory === null || typeof inventory.list !== 'function') {
+              attach()
+              return
+            }
+            try {
+              const result = await inventory.list()
+              if (result === null || result === undefined || result.ok !== true) {
+                attach()
+                return
+              }
+              const entries =
+                result.value !== null && typeof result.value === 'object' && Array.isArray(result.value.entries)
+                  ? result.value.entries
+                  : null
+              if (entries === null) {
+                attach()
+                return
+              }
+              const installed = entries.some((entry) => {
+                if (entry === null || typeof entry !== 'object') return false
+                if (entry.enabled === false || entry.fiberPhase === 'failed') return false
+                const name = typeof entry.moduleName === 'string' ? entry.moduleName : ''
+                const id = typeof entry.entryId === 'string' ? entry.entryId : ''
+                return SPEND_SOURCE_MODULES.some((module) => name.includes(module) || id.includes(module))
+              })
+              if (installed) attach()
+            } catch (error) {
+              attach()
+            }
+          }
+          void detect()
+          return () => {
+            if (listening) window.removeEventListener(SPEND_EVENT, onSpendSource)
+          }
+        }, 'quota-meter: spend sources')
         store.start()
         void store.refresh()
         ctx.slots.inject('conversation.composer.dock', () =>
