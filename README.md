@@ -15,7 +15,7 @@
 | [`额度消耗`](dsh-quota-meter) | 本会话已花多少额度 | 输入框下方 |
 | [`Markdown 编辑器`](dsh-markdown-editor) | 在文件预览里直接改 Markdown：所见即所得 / 分栏 / 源码 / 预览 | 右侧边栏文件预览 |
 
-四个插件互相独立，可以只装其中一个。
+四个插件互相独立，可以只装其中一个。各插件的当前版本与变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 使用
 
@@ -90,6 +90,14 @@ cd dsh-markdown-editor/build
 npm install
 node build.mjs
 ```
+
+## 版本与发版
+
+插件版本以各自目录里的 `package.json` 的 `version` 为准，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+- 单个插件发布：`git tag -a <插件目录名>-v<版本> -m "<说明>"`，例如 `markdown-editor-v1.1.0`
+- 整套快照：`git tag -a v<版本> -m "<说明>"`（历史标签 `v0.1.0` – `v0.6.0` 即此含义）
+- 发版前先把该插件的 `version` 升上去、在 CHANGELOG 补一节；只改代码不升版本，不算一次发布
 
 ## 说明
 
