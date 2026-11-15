@@ -1,20 +1,31 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-quota-meter',
+  id: '@lieakks/dsh-quota-meter',
   factory(require) {
     const React = require('react')
     const h = React.createElement
 
     const NS = 'quota-meter'
-    /** Accumulated spend per Session: sessionId → { spent, at }. */
-    const SPEND_KEY = 'dsh-quota-meter:spend:v2'
-    /** Pre-v2 baseline store, kept only so the old key can be cleared. */
-    const LEGACY_KEY = 'dsh-quota-meter:sessions'
+    /**
+     * One durable ledger: `{ sessions, lastTotal, lastRunAt, unattributed }`.
+     * `sessions` is sessionId → { spent, at }, `lastTotal` is the account total the
+     * previous reading saw (so a reload can still charge the gap), `lastRunAt` keeps
+     * when each Session last stopped running, `unattributed` is money no Session claimed.
+     */
+    const LEDGER_KEY = 'dsh-quota-meter:ledger:v3'
+    /** Earlier shapes, read once for migration and then removed. */
+    const LEGACY_KEYS = ['dsh-quota-meter:spend:v2', 'dsh-quota-meter:sessions']
     const MAX_SESSIONS = 100
     const POLL_MS = 15000
     const SETTLE_MS = 2000
     const STALE_MS = 60000
     /** Amounts below this are float noise, not real movement. */
     const EPSILON = 0.000001
+    /**
+     * A run's bill can settle after the run ended. A drop seen while nothing is
+     * running is charged to the most recent run inside this window; older than that
+     * it has no owner and counts as unattributed.
+     */
+    const GRACE_MS = 5 * 60000
     /**
      * Same-page event a companion plugin uses to declare model spend it caused. The
      * polish button is the one source today; the list is explicit so an unrelated
@@ -24,8 +35,12 @@ window.__ModuleLoader__.load({
     const SPEND_SOURCES = new Set(['polish'])
     /** Loader module names that back a spend source, used for the install check. */
     const SPEND_SOURCE_MODULES = ['input-polish']
-    /** Longest a companion call may hold the books; the Host caps one at 120s. */
-    const SPEND_HOLD_MS = 150000
+    /**
+     * How long a companion call counts as in flight for splitting. It matches the
+     * grace window below, so a lost "end" neither splits forever nor leaves the tail
+     * uncharged: past this, the late-settlement rule takes over.
+     */
+    const SPEND_HOLD_MS = 5 * 60000
 
     const DICT = {
       en: {
@@ -39,6 +54,7 @@ window.__ModuleLoader__.load({
         used: 'this session',
         since: 'Counting since',
         updated: 'Updated',
+        unattributed: 'Not attributed to any session',
       },
       zh: {
         reading: '额度读取中…',
@@ -51,6 +67,7 @@ window.__ModuleLoader__.load({
         used: '本会话已用',
         since: '开始统计',
         updated: '更新于',
+        unattributed: '未能归属到会话',
       },
     }
 
@@ -130,45 +147,82 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Read the durable per-Session spend counters: sessionId → { spent, at }.
-     * They live in localStorage so reopening a Session, or reloading the page,
-     * keeps the same accumulated figure instead of starting over.
+     * Read the durable ledger. Sessions, the previous account total, when each
+     * Session last ran and the unattributed remainder all live in localStorage so a
+     * reload neither loses the counters nor the drop that settled while it happened.
      */
-    function readSpend() {
+    function readLedger() {
+      const empty = { sessions: {}, lastTotal: null, lastReadAt: null, lastRunAt: {}, unattributed: 0 }
       try {
-        // The pre-v2 shape measured a drop from a captured baseline, which a top-up
-        // wiped out; it cannot be converted, so it is dropped once.
-        window.localStorage.removeItem(LEGACY_KEY)
-      } catch (error) {}
-      try {
-        const raw = window.localStorage.getItem(SPEND_KEY)
-        if (!raw) return {}
-        const parsed = JSON.parse(raw)
-        if (!parsed || typeof parsed !== 'object') return {}
-        const spend = {}
-        for (const [id, entry] of Object.entries(parsed)) {
-          if (entry && typeof entry.spent === 'number' && Number.isFinite(entry.spent) && entry.spent >= 0) {
-            spend[id] = {
+        const raw = window.localStorage.getItem(LEDGER_KEY)
+        if (raw !== null) {
+          const parsed = JSON.parse(raw)
+          if (parsed === null || typeof parsed !== 'object') return empty
+          const sessions = {}
+          const source = parsed.sessions !== null && typeof parsed.sessions === 'object' ? parsed.sessions : {}
+          for (const [id, entry] of Object.entries(source)) {
+            if (entry === null || typeof entry !== 'object') continue
+            if (typeof entry.spent !== 'number' || !Number.isFinite(entry.spent) || entry.spent < 0) continue
+            sessions[id] = {
               spent: entry.spent,
               at: typeof entry.at === 'number' && Number.isFinite(entry.at) ? entry.at : 0,
             }
           }
+          const lastRunAt = {}
+          const runs = parsed.lastRunAt !== null && typeof parsed.lastRunAt === 'object' ? parsed.lastRunAt : {}
+          for (const [id, value] of Object.entries(runs)) {
+            if (typeof value === 'number' && Number.isFinite(value)) lastRunAt[id] = value
+          }
+          return {
+            sessions,
+            lastTotal:
+              typeof parsed.lastTotal === 'number' && Number.isFinite(parsed.lastTotal) ? parsed.lastTotal : null,
+            lastReadAt:
+              typeof parsed.lastReadAt === 'number' && Number.isFinite(parsed.lastReadAt) ? parsed.lastReadAt : null,
+            lastRunAt,
+            unattributed:
+              typeof parsed.unattributed === 'number' && Number.isFinite(parsed.unattributed) && parsed.unattributed > 0
+                ? parsed.unattributed
+                : 0,
+          }
         }
-        return spend
+      } catch (error) {}
+      try {
+        // v2 stored only the counters, flat; keep them and drop the older baseline key.
+        const legacy = window.localStorage.getItem(LEGACY_KEYS[0])
+        const sessions = {}
+        if (legacy !== null) {
+          const parsed = JSON.parse(legacy)
+          if (parsed !== null && typeof parsed === 'object') {
+            for (const [id, entry] of Object.entries(parsed)) {
+              if (entry === null || typeof entry !== 'object') continue
+              if (typeof entry.spent !== 'number' || !Number.isFinite(entry.spent) || entry.spent < 0) continue
+              sessions[id] = {
+                spent: entry.spent,
+                at: typeof entry.at === 'number' && Number.isFinite(entry.at) ? entry.at : 0,
+              }
+            }
+          }
+        }
+        for (const key of LEGACY_KEYS) window.localStorage.removeItem(key)
+        return { sessions, lastTotal: null, lastReadAt: null, lastRunAt: {}, unattributed: 0 }
       } catch (error) {
-        return {}
+        return empty
       }
     }
 
-    /** Persist the counters, keeping only the most recently touched Sessions. */
-    function writeSpend(spend) {
+    /** Persist the ledger, keeping only the most recently touched Sessions. */
+    function writeLedger(ledger) {
       try {
-        const ids = Object.keys(spend)
+        const ids = Object.keys(ledger.sessions)
         if (ids.length > MAX_SESSIONS) {
-          ids.sort((left, right) => spend[left].at - spend[right].at)
-          for (const id of ids.slice(0, ids.length - MAX_SESSIONS)) delete spend[id]
+          ids.sort((left, right) => ledger.sessions[left].at - ledger.sessions[right].at)
+          for (const id of ids.slice(0, ids.length - MAX_SESSIONS)) {
+            delete ledger.sessions[id]
+            delete ledger.lastRunAt[id]
+          }
         }
-        window.localStorage.setItem(SPEND_KEY, JSON.stringify(spend))
+        window.localStorage.setItem(LEDGER_KEY, JSON.stringify(ledger))
       } catch (error) {}
     }
 
@@ -199,6 +253,7 @@ window.__ModuleLoader__.load({
      * difference from a stored snapshot, so a recharge leaves the counters alone.
      */
     function createStore(ctx) {
+      const ledger = readLedger()
       let snapshot = {
         state: 'reading',
         currency: 'CNY',
@@ -209,15 +264,20 @@ window.__ModuleLoader__.load({
         pending: false,
         stale: false,
         updatedAt: 0,
+        unattributed: ledger.unattributed,
       }
-      const spend = readSpend()
       const mounted = new Set()
       const listeners = new Set()
       const statuses = new Map()
       /** Sessions that were running during the interval since the last reading. */
       const intervalRunning = new Set()
-      /** Account total at the last reading; `null` until the first one lands. */
-      let lastTotal = null
+      /**
+       * Subagent child → the Session that spawned it. Learned from `api-session/added`,
+       * which carries the summary's `origin` and `parentSessionId`. Only these mapped
+       * children are folded into their parent; any other unknown id is skipped, so no
+       * counter is invented for a Session the user never sees.
+       */
+      const parents = new Map()
       /** Companion calls in flight per Session: sessionId → expiry timestamp. */
       const polishUntil = new Map()
       let inFlight = null
@@ -230,6 +290,17 @@ window.__ModuleLoader__.load({
         for (const listener of listeners) listener(snapshot)
       }
 
+      /** The counter a Session's spend belongs to: a mapped subagent folds into its parent. */
+      const ownerOf = (id) => {
+        const parent = parents.get(id)
+        return parent === undefined ? id : parent
+      }
+
+      /** Whether that owner has a counter the user can actually see. */
+      const known = (id) => ledger.sessions[id] !== undefined
+
+      const save = () => writeLedger(ledger)
+
       /** This UI's identity for one account read, sampled as the read is issued. */
       const metadata = () => ({
         version: versionOf(),
@@ -240,44 +311,81 @@ window.__ModuleLoader__.load({
       /**
        * Credit one reading to whichever Sessions were running while its drop happened.
        *
-       * The account balance is shared, so the only per-Session signal is *when* it fell:
-       * the drop between two readings belongs to the Sessions that ran in that interval.
-       * A rise (top-up or refund) is not spend and never touches a counter — that is
-       * what used to reset every Session to zero after a recharge. With several runs
-       * in flight the drop is split evenly, which is an estimate, not a bill.
+       * The account balance is shared, so the only per-Session signal is *when* it fell.
+       * Subagent children are folded into the Session that spawned them; anything with
+       * no visible counter is skipped rather than given an invisible one. A rise
+       * (top-up or refund) is not spend and never touches a counter. A drop seen while
+       * nothing runs is charged to the last run inside `GRACE_MS` (late settlement),
+       * and anything older still has no owner: it accumulates as unattributed money
+       * instead of disappearing.
        */
       const attribute = (total) => {
-        const previous = lastTotal
-        lastTotal = total
+        const previous = ledger.lastTotal
+        // A ledger last written long ago cannot explain today's drop: it covers hours
+        // the page never watched. Treat it as a fresh baseline instead of charging it.
+        const readable = ledger.lastReadAt === null || Date.now() - ledger.lastReadAt <= GRACE_MS
+        ledger.lastTotal = total
+        ledger.lastReadAt = Date.now()
         const now = Date.now()
-        const runningNow = new Set()
-        for (const [id, running] of statuses) if (running) runningNow.add(id)
-        // A companion call in flight is attributed exactly like an Agent run. One that
-        // never says it ended stops counting at its deadline — and is dropped from the
-        // pending set too, so a lost "end" cannot keep charging later readings.
+        const running = new Set()
+        for (const [id, active] of statuses) if (active) running.add(id)
+        // A companion call in flight counts like an Agent run. One that never says it
+        // ended stops counting at its deadline, pending set included.
         for (const [id, expiresAt] of [...polishUntil]) {
           if (expiresAt > now) {
-            runningNow.add(id)
+            running.add(id)
             continue
           }
           polishUntil.delete(id)
           intervalRunning.delete(id)
         }
-        const credited = new Set([...intervalRunning, ...runningNow])
-        intervalRunning.clear()
-        for (const id of runningNow) intervalRunning.add(id)
-        if (previous === null || credited.size === 0) return
-        const delta = previous - total
-        // A recharge, a refund or an unchanged reading: nothing to charge.
-        if (delta <= EPSILON) return
-        const at = Date.now()
-        const share = delta / credited.size
-        for (const id of credited) {
-          const entry = spend[id] ?? { spent: 0, at }
-          entry.spent += share
-          spend[id] = entry
+
+        const credited = new Set()
+        for (const id of [...intervalRunning, ...running]) {
+          const owner = ownerOf(id)
+          if (known(owner)) credited.add(owner)
         }
-        writeSpend(spend)
+        intervalRunning.clear()
+        for (const id of running) {
+          const owner = ownerOf(id)
+          if (known(owner)) intervalRunning.add(owner)
+        }
+
+        if (previous === null) return
+        const delta = previous - total
+        if (delta <= EPSILON) return
+        // A reading whose predecessor is too old to describe this interval only
+        // re-baselines; charging it would bill hours the page never saw.
+        if (!readable) return
+
+        let targets = [...credited]
+        if (targets.length === 0) {
+          // Late settlement: charge the most recent run that still falls in the grace
+          // window. Nothing older can be attributed honestly.
+          let latest = 0
+          let latestId = null
+          for (const [id, at] of Object.entries(ledger.lastRunAt)) {
+            if (!known(id)) continue
+            if (now - at > GRACE_MS) continue
+            if (at > latest) {
+              latest = at
+              latestId = id
+            }
+          }
+          if (latestId !== null) targets = [latestId]
+        }
+        if (targets.length === 0) {
+          ledger.unattributed += delta
+          save()
+          publish({ unattributed: ledger.unattributed })
+          return
+        }
+        const share = delta / targets.length
+        for (const id of targets) {
+          const entry = ledger.sessions[id]
+          entry.spent += share
+        }
+        save()
         // Mounted widgets read the counter from the shared snapshot, so a change here
         // has to reach them through the usual notification.
         publish({})
@@ -345,9 +453,9 @@ window.__ModuleLoader__.load({
         const key = text(sessionId)
         if (!key || key === 'undefined' || key === 'null') return () => {}
         mounted.add(key)
-        if (spend[key] === undefined) {
-          spend[key] = { spent: 0, at: Date.now() }
-          writeSpend(spend)
+        if (ledger.sessions[key] === undefined) {
+          ledger.sessions[key] = { spent: 0, at: Date.now() }
+          save()
         }
         return () => {
           mounted.delete(key)
@@ -356,14 +464,30 @@ window.__ModuleLoader__.load({
 
       /** Credit attributed to one Session. */
       const usedFor = (sessionId) => {
-        const entry = spend[text(sessionId)]
+        const entry = ledger.sessions[text(sessionId)]
         return entry === undefined ? 0 : entry.spent
       }
 
       /** When that Session's counter was opened. */
       const sinceFor = (sessionId) => {
-        const entry = spend[text(sessionId)]
+        const entry = ledger.sessions[text(sessionId)]
         return entry === undefined ? 0 : entry.at
+      }
+
+      /**
+       * Learn that a Session is a subagent child, so its spend can be folded into the
+       * Session that spawned it. The summary carries the parent and the origin; a child
+       * whose parent has no visible counter is simply skipped by `attribute`.
+       */
+      const noteSession = (summary) => {
+        if (summary === null || typeof summary !== 'object') return
+        if (summary.origin !== 'subagent') return
+        const child = text(summary.sessionId)
+        const parent = text(summary.parentSessionId)
+        if (!child || child === 'undefined' || child === 'null') return
+        if (!parent || parent === 'undefined' || parent === 'null') return
+        if (child === parent) return
+        parents.set(child, parent)
       }
 
       const runningCount = () => {
@@ -374,17 +498,22 @@ window.__ModuleLoader__.load({
 
       /**
        * Follow Session running state. A run starting also opens the interval it will
-       * be charged for, and a run ending lets billing settle before the closing read;
-       * the widget otherwise polls while anything is in flight.
+       * be charged for, and a run ending records when it happened (late settlement
+       * needs it) and lets billing settle before the closing read; the widget
+       * otherwise polls while anything is in flight.
        */
       const noteStatus = (sessionId, running) => {
         const key = text(sessionId)
         const next = running === true
         if (statuses.get(key) === next) return
         statuses.set(key, next)
-        if (next) {
-          intervalRunning.add(key)
+        const owner = ownerOf(key)
+        if (known(owner)) {
+          // Stamped at both ends: a page reloaded mid-run still has a grace target.
+          ledger.lastRunAt[owner] = Date.now()
+          save()
         }
+        if (next) intervalRunning.add(key)
         const count = runningCount()
         publish({ running: count })
         if (settle !== null) {
@@ -425,6 +554,11 @@ window.__ModuleLoader__.load({
           armSettle()
           return
         }
+        const owner = ownerOf(key)
+        if (known(owner)) {
+          ledger.lastRunAt[owner] = Date.now()
+          save()
+        }
         polishUntil.set(key, Date.now() + SPEND_HOLD_MS)
         void load()
       }
@@ -442,12 +576,15 @@ window.__ModuleLoader__.load({
 
       const reset = () => {
         // A different account starts over: every counter belongs to the old one.
-        for (const id of Object.keys(spend)) delete spend[id]
+        ledger.sessions = {}
+        ledger.lastRunAt = {}
+        ledger.lastTotal = null
+        ledger.lastReadAt = null
+        ledger.unattributed = 0
         intervalRunning.clear()
-        lastTotal = null
-        writeSpend(spend)
-        for (const id of mounted) spend[id] = { spent: 0, at: Date.now() }
-        if (mounted.size > 0) writeSpend(spend)
+        parents.clear()
+        for (const id of mounted) ledger.sessions[id] = { spent: 0, at: Date.now() }
+        save()
         publish({
           state: 'reading',
           currency: 'CNY',
@@ -458,6 +595,7 @@ window.__ModuleLoader__.load({
           pending: false,
           stale: false,
           updatedAt: 0,
+          unattributed: 0,
         })
       }
 
@@ -483,6 +621,7 @@ window.__ModuleLoader__.load({
         usedFor,
         sinceFor,
         noteStatus,
+        noteSession,
         noteSpendSource,
         start,
         reset,
@@ -568,14 +707,26 @@ window.__ModuleLoader__.load({
       }
 
       const updated = snapshot.updatedAt ? new Date(snapshot.updatedAt) : null
+      const base =
+        updated === null ? t('refresh') : t('updated') + ' ' + formatTime(updated.getTime())
+      // Money no Session could claim is shown only here, so the total can be
+      // reconciled when it drifts.
+      const title =
+        snapshot.unattributed > 0.005
+          ? base +
+            ' · ' +
+            t('unattributed') +
+            ' ' +
+            symbol +
+            formatAmount(snapshot.unattributed)
+          : base
       return h(
         'div',
         {
           className: 'qm',
           'data-state': snapshot.state,
           'data-running': snapshot.running > 0 ? 'true' : 'false',
-          title:
-            updated === null ? t('refresh') : t('updated') + ' ' + formatTime(updated.getTime()),
+          title,
         },
         children,
       )
@@ -603,6 +754,15 @@ window.__ModuleLoader__.load({
               store.noteStatus(sessionId, running)
             }),
           'quota-meter: session status',
+        )
+        // Session summaries carry a subagent child's origin and parent, which is what
+        // lets its spend be folded into the Session that spawned it.
+        ctx.effect(
+          () =>
+            listen('api-session/added', (summary) => {
+              store.noteSession(summary)
+            }),
+          'quota-meter: session identity',
         )
         const resetAccount = () => {
           store.reset()
